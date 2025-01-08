@@ -239,7 +239,7 @@ class DDPM(pl.LightningModule):
         # squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=2)) / dim_
         
         # compute the covariance matrix
-        covariance_matrix = torch.matmul(eps_pred.mT, eps_pred)
+        orch.matmul(eps_pred.permute(1, 0), eps_pred)
         
         diag_elements_mean = covariance_matrix.diagonal().mean()
         non_diag_elements_mean = torch.mean(torch.tril(covariance_matrix, diagonal=-1))

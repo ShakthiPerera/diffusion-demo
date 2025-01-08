@@ -237,9 +237,12 @@ class DDPM(pl.LightningModule):
         # compute squared norm loss
         # dim_ = torch.tensor(2.0, requires_grad=True)
         # squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=2)) / dim_
-        
-        # compute the covariance matrix
-        covariance_matrix = eps_pred.T@eps_pred/eps_pred.shape[0]
+
+        # Reshape eps_pred to (batch_size, num_features)
+        eps_pred = eps_pred.reshape(x.shape[0], -1)
+
+        # compute the covariance matrix using the reshaped eps_pred
+        covariance_matrix = torch.matmul(eps_pred.T, eps_pred) / eps_pred.shape[0] 
         
         diag_elements_mean = covariance_matrix.diagonal().mean()
         non_diag_elements_mean = torch.mean(torch.tril(covariance_matrix, diagonal=-1))

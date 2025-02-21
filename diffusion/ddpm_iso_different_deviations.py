@@ -42,7 +42,7 @@ class DDPM(pl.LightningModule):
                  criterion='mse',
                  lr=1e-04,
                  reg=0.01,
-                 target_variance=1):
+                 target_variance=1.0):
         super().__init__()
 
         # set trainable epsilon model

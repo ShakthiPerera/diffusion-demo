@@ -239,7 +239,7 @@ class DDPM(pl.LightningModule):
         squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=2)) / dim_
 
         #one = torch.tensor(1.0, requires_grad=True)
-        target_variance_tensor = torch.tensor(target_variance, requires_grad=True)
+        target_variance_tensor = torch.tensor(self.target_variance, requires_grad=True)
         
         norm_loss = self.criterion(squared_norm_preds.to(eps_pred.device), target_variance_tensor.to(eps_pred.device))
         simple_diff_loss = self.criterion(eps_pred, eps)

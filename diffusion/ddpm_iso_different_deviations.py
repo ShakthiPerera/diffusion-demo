@@ -111,7 +111,7 @@ class DDPM(pl.LightningModule):
     def diffuse_step(self, x, tidx):
         '''Simulate single forward process step.'''
         beta = self.betas[tidx]
-        eps = torch.randn_like(x)
+        eps = torch.randn_like(x) * torch.sqrt(self.target_variance)
         x_noisy = (1 - beta).sqrt() * x + beta.sqrt() * eps
         return x_noisy
 
@@ -134,7 +134,7 @@ class DDPM(pl.LightningModule):
     def diffuse(self, x0, tids, return_eps=False):
         '''Simulate multiple forward steps at once.'''
         alpha_bar = self.alphas_bar[tids]
-        eps = torch.randn_like(x0)
+        eps = torch.randn_like(x0)* torch.sqrt(self.target_variance)
 
         missing_shape = [1] * (eps.ndim - alpha_bar.ndim)
         alpha_bar = alpha_bar.view(*alpha_bar.shape, *missing_shape)
@@ -171,7 +171,7 @@ class DDPM(pl.LightningModule):
 
         # generate random sample
         if random_sample:
-            eps = torch.randn_like(x_denoised_mean)
+            eps = torch.randn_like(x_denoised_mean) * torch.sqrt(self.target_variance)
             x_denoised = x_denoised_mean + x_denoised_var.sqrt() * eps
 
         if random_sample:

@@ -171,7 +171,7 @@ class DDPM(pl.LightningModule):
 
         # generate random sample
         if random_sample:
-            eps = torch.randn_like(x_denoised_mean) * torch.sqrt(self.target_variance)
+            eps = torch.randn_like(x_denoised_mean) * torch.sqrt(torch.tensor(self.target_variance))
             x_denoised = x_denoised_mean + x_denoised_var.sqrt() * eps
 
         if random_sample:

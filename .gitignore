@@ -3,5 +3,7 @@ __pycache__/
 
 data/
 mnist/
+csv_files/
+plots/
 lightning_logs
 

@@ -8,6 +8,8 @@ import pytorch_lightning as pl
 
 from .unet import UNet
 from .schedules import make_beta_schedule
+import torch.nn.functional as F
+
 
 
 class DDPM(pl.LightningModule):
@@ -98,6 +100,13 @@ class DDPM(pl.LightningModule):
         self.register_buffer('alphas_bar', alphas_bar)
         self.register_buffer('betas_tilde', betas_tilde)
 
+    def compute_snr(self, tids):
+        # assuming α_t = alphas_bar[tids], σ_t² = 1 − ᾱ
+        α_bar = self.alphas_bar[tids]
+        sigma2 = (1 - α_bar)
+        snr = α_bar / sigma2
+        return snr 
+    
     @property
     def num_steps(self):
         '''Get the total number of time steps.'''
@@ -219,37 +228,67 @@ class DDPM(pl.LightningModule):
         iso = np.vdot(data, data) / len(data)
         return iso
     
-    def loss(self, x):
-        '''Compute stochastic loss.'''
-        # # draw random time steps
-        tids = torch.randint(0, self.num_steps, size=(x.shape[0], 1), device=x.device)
+    # def loss(self, x):
+    #     '''Compute stochastic loss.'''
+    #     # # draw random time steps
+    #     tids = torch.randint(0, self.num_steps, size=(x.shape[0], 1), device=x.device)
         
-        ts = tids.to(x.dtype) + 1 # note that tidx = 0 corresponds to t = 1.0
+    #     ts = tids.to(x.dtype) + 1 # note that tidx = 0 corresponds to t = 1.0
         
-        # perform forward process steps
+    #     # perform forward process steps
+    #     x_noisy, eps = self.diffuse(x, tids, return_eps=True)
+    #     # self.eps_list.append(eps)
+
+    #     # predict eps based on noisy x and t
+    #     eps_pred = self.eps_model(x_noisy, ts)
+    #     # self.eps_pred_list.append(eps_pred)
+        
+    #     # compute squared norm loss
+    #     dim_ = torch.tensor(2.0, requires_grad=True)
+    #     squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=2)) / dim_
+
+    #     one = torch.tensor(1.0, requires_grad=True)
+        
+    #     norm_loss = self.criterion(squared_norm_preds.to(eps_pred.device), one.to(eps_pred.device))
+    #     simple_diff_loss = self.criterion(eps_pred, eps)
+        
+    #     loss = simple_diff_loss + self.reg*norm_loss 
+
+    #     return loss, simple_diff_loss, norm_loss
+    
+    def loss(self, x, loss_weighting_type = 'constant'):
+        tids = torch.randint(0, self.num_steps, (x.shape[0],1), device=x.device)
+        ts = tids.to(x.dtype) + 1
         x_noisy, eps = self.diffuse(x, tids, return_eps=True)
-        # self.eps_list.append(eps)
-
-        # predict eps based on noisy x and t
         eps_pred = self.eps_model(x_noisy, ts)
-        # self.eps_pred_list.append(eps_pred)
         
-        # compute squared norm loss
-        dim_ = torch.tensor(2.0, requires_grad=True)
-        squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=2)) / dim_
+        # simple mse
+        mse = self.criterion(eps_pred, eps)
 
-        one = torch.tensor(1.0, requires_grad=True)
+        # compute weights
+        snr = self.compute_snr(tids.squeeze(-1).squeeze(0))
+        gamma = getattr(self, 'snr_gamma', 5.0)
+        base_w = torch.minimum(snr, torch.tensor(gamma, device=snr.device)) / snr
+        mse_weight = base_w.view(-1, *([1]*(eps_pred.ndim-1)))
+        mse_weighted = (mse * mse_weight.squeeze(-1)).mean()
+
+        simple_mse = mse.mean()
+
+        # norm regularization
+        squared_norm_preds = torch.mean(torch.sum(eps_pred**2, dim=1)) / 2.0
+        norm_loss = self.criterion(squared_norm_preds.to(eps_pred.device),
+                                torch.tensor(1.0, device=eps_pred.device))
+        reg_loss = self.reg * norm_loss
         
-        norm_loss = self.criterion(squared_norm_preds.to(eps_pred.device), one.to(eps_pred.device))
-        simple_diff_loss = self.criterion(eps_pred, eps)
-        
-        loss = simple_diff_loss + self.reg*norm_loss 
-
-        return loss, simple_diff_loss, norm_loss
-
-    def train_step(self, x_batch):
+        if loss_weighting_type == 'min_snr':
+            loss = mse_weighted + reg_loss 
+        elif loss_weighting_type == 'constant':
+            loss = simple_mse + reg_loss
+        return loss, simple_mse, norm_loss
+    
+    def train_step(self, x_batch, loss_weighting_type):
         self.optimizer.zero_grad()
-        loss, simple_diff_loss, norm_loss = self.loss(x_batch)
+        loss, simple_diff_loss, norm_loss = self.loss(x_batch, loss_weighting_type)
         loss.backward()
         self.optimizer.step()
         return loss.item(), simple_diff_loss.item(), norm_loss.item()

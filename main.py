@@ -359,8 +359,8 @@ def train(model, train_loader, device, loss_weighting_type, steps=150000):
         pbar.set_postfix({
             'step': step + 1,
             'loss': np.array(train_losses).mean(),
-            'simple_loss': np.array(simple_loss).mean(),
-            'norm_loss': np.array(norm_loss).mean()
+            'simple_loss': np.array(diff_losses).mean(),
+            'norm_loss': np.array(norm_losses).mean()
         })
         # Increment progress bar and step counter
         pbar.update(1)

@@ -245,7 +245,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state, purpose):
             pin_memory=True,
         )
     
-    return ds, data_loader , X_output
+    return ds, data_loader , X_output, X
 
 
 def create_model(reg, schedule_type, learning_rate, num_features):
@@ -358,9 +358,9 @@ def train(model, train_loader, device, loss_weighting_type, steps=150000):
         # Update progress bar with current step and loss information
         pbar.set_postfix({
             'step': step + 1,
-            'loss': loss,
-            'simple_loss': simple_loss,
-            'norm_loss': norm_loss
+            'loss': np.array(train_losses).mean(),
+            'simple_loss': np.array(simple_loss).mean(),
+            'norm_loss': np.array(norm_loss).mean()
         })
         # Increment progress bar and step counter
         pbar.update(1)
@@ -370,6 +370,20 @@ def train(model, train_loader, device, loss_weighting_type, steps=150000):
     pbar.close()
     # Return the collected losses
     return train_losses, diff_losses, norm_losses        
+
+def plot_real_generated_data(x_gen,X_test):
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.scatter(x_gen[:,0].cpu().numpy(), x_gen[:,1].cpu().numpy(), s=3,
+        edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.0), label='Generated')
+    ax.scatter(X_test[:,0].cpu().numpy(), X_test[:,1].cpu().numpy(), s=3,
+        edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.8), label='Real')
+    ax.set(xlim=(-1.25, 1.25), ylim=(-1.25, 1.25))
+    ax.set_aspect('equal', adjustable='box')
+    ax.grid(visible=True, which='both', color='gray', alpha=0.2, linestyle='-')
+    ax.set_axisbelow(True)
+    ax.legend()
+    fig.tight_layout()
+    return fig
 
 '''
 def plot_step_by_step_noise(x_noisy,x_denoise,path):
@@ -400,19 +414,7 @@ def plot_step_by_step_noise(x_noisy,x_denoise,path):
         plt.savefig(f"{path}/reverse_diff_steps_part_{time_idx}.png")
         plt.clf()
 
-def plot_real_generated_data(x_gen,X_test,path):
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.scatter(x_gen[:,0].cpu().numpy(), x_gen[:,1].cpu().numpy(), s=3,
-        edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.0), label='Generated')
-    ax.scatter(X_test[:,0].cpu().numpy(), X_test[:,1].cpu().numpy(), s=3,
-        edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.8), label='Real')
-    ax.set(xlim=(-1.25, 1.25), ylim=(-1.25, 1.25))
-    ax.set_aspect('equal', adjustable='box')
-    ax.grid(visible=True, which='both', color='gray', alpha=0.2, linestyle='-')
-    ax.set_axisbelow(True)
-    ax.legend()
-    plt.savefig(f"{path}/generated_and_real_dataset.png")
-    fig.tight_layout()
+
 
 def plot_losses(train_losses, diff_losses, norm_losses, path):
     window_size = 30
@@ -462,11 +464,11 @@ if __name__ == "__main__":
     print(f"Learning Rate: {args.lr}")
     print(f"Hidden Layer Dims: {args.hl}")
 
-    ds, train_loader, X_train= load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed, purpose="train")
-    print(type(train_loader))
+    ds, train_loader, X_train, X = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed, purpose="train")
+    # print(type(train_loader))
     # ds.plot_dataset()
     model = create_model(args.reg, args.schedule, args.lr, args.hl)
-    print(model)
+    # print(model)
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
     train_losses , diff_losses, norm_losses = train(model, train_loader, device, loss_weighting_type=args.loss_weighting_type, steps=args.steps)
 
@@ -478,25 +480,27 @@ if __name__ == "__main__":
     # os.makedirs(path_plots, exist_ok=True)
 
     X_train = X_train.to(device)
-    x_noisy = model.diffuse_all_steps(X_train)
-    x_denoise, x_eps = model.denoise_all_steps(torch.randn(10000, 2).to(device))
+    # x_noisy = model.diffuse_all_steps(X_train)
+    # x_denoise, x_eps = model.denoise_all_steps(torch.randn(10000, 2).to(device))
     # plot_step_by_step_noise(x_noisy, x_denoise, path_plots)
 
     model.eval()
-    ds, _, X_test = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed, purpose='validate')
-    X_test = X_test.to(device)
-    x_gen = model.generate(sample_shape=X_test[0].shape, num_samples=10000)
-    prdc_ = compute_prdc(real_features=X_test.cpu().numpy(), fake_features=x_gen.cpu().numpy(), nearest_k=5)
+    X = torch.Tensor(X).to(device)
+    x_gen = model.generate(sample_shape=X[0].shape, num_samples=10000)
+    prdc_ = compute_prdc(real_features=X.cpu().numpy(), fake_features=x_gen[0].cpu().numpy(), nearest_k=5)
     print(f"PRDC: {prdc_}")
+    fig = plot_real_generated_data(X, x_gen[0])
+    plt.show(fig)
 
-    prdc_file_path = f"{main_path}/prdc_metrics.txt"
-    os.makedirs(os.path.dirname(prdc_file_path), exist_ok=True)
-    with open(prdc_file_path, 'w') as f:
-        f.write("PRDC Metrics:\n")
-        f.write(f"Precision: {prdc_['precision']:.6f}\n")
-        f.write(f"Recall: {prdc_['recall']:.6f}\n")
-        f.write(f"Density: {prdc_['density']:.6f}\n")
-        f.write(f"Coverage: {prdc_['coverage']:.6f}\n")
+
+    # prdc_file_path = f"{main_path}/prdc_metrics.txt"
+    # os.makedirs(os.path.dirname(prdc_file_path), exist_ok=True)
+    # with open(prdc_file_path, 'w') as f:
+    #     f.write("PRDC Metrics:\n")
+    #     f.write(f"Precision: {prdc_['precision']:.6f}\n")
+    #     f.write(f"Recall: {prdc_['recall']:.6f}\n")
+    #     f.write(f"Density: {prdc_['density']:.6f}\n")
+    #     f.write(f"Coverage: {prdc_['coverage']:.6f}\n")
 
     # plot_real_generated_data(x_gen,X_test,path_plots)
 

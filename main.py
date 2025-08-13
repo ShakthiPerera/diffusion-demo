@@ -345,32 +345,22 @@ def train(model, train_loader, device, loss_weighting_type, steps=150000):
             batch = next(data_iter)
         
         # Move batch to the specified device and stack it
-        x_batch = torch.stack(batch).to(device)
-        # Use mixed precision for forward pass
-        with autocast(device_type='cuda'):
-            # Perform a single training step and get losses
-            loss, simple_loss, norm_loss = model.train_step(x_batch, loss_weighting_type)
+        x_batch = batch[0].to(device)
         
-        # Scale the loss for backpropagation with mixed precision
-        scaler.scale(loss).backward()
-        # Update model parameters
-        scaler.step(model.optimizer)
-        # Update the scaler for the next iteration
-        scaler.update()
-        # Clear gradients for the next step
-        model.optimizer.zero_grad()
-        
+        # Perform a single training step and get losses
+        loss, simple_loss, norm_loss = model.train_step(x_batch, loss_weighting_type)
+                
         # Store losses for the current step
-        train_losses[step] = loss.item()
-        diff_losses[step] = simple_loss.item()
-        norm_losses[step] = norm_loss.item()
+        train_losses[step] = loss
+        diff_losses[step] = simple_loss
+        norm_losses[step] = norm_loss
         
         # Update progress bar with current step and loss information
         pbar.set_postfix({
             'step': step + 1,
-            'loss': loss.item(),
-            'simple_loss': simple_loss.item(),
-            'norm_loss': norm_loss.item()
+            'loss': loss,
+            'simple_loss': simple_loss,
+            'norm_loss': norm_loss
         })
         # Increment progress bar and step counter
         pbar.update(1)

@@ -383,7 +383,7 @@ def plot_real_generated_data(x_gen,X_test):
     ax.set_axisbelow(True)
     ax.legend()
     fig.tight_layout()
-    return fig
+    plt.savefig('plot.png')
 
 '''
 def plot_step_by_step_noise(x_noisy,x_denoise,path):
@@ -489,9 +489,8 @@ if __name__ == "__main__":
     x_gen = model.generate(sample_shape=X[0].shape, num_samples=10000)
     prdc_ = compute_prdc(real_features=X.cpu().numpy(), fake_features=x_gen[0].cpu().numpy(), nearest_k=5)
     print(f"PRDC: {prdc_}")
-    fig = plot_real_generated_data(X, x_gen[0])
-    plt.show(fig)
-
+    plot_real_generated_data(X, x_gen[0])
+  
 
     # prdc_file_path = f"{main_path}/prdc_metrics.txt"
     # os.makedirs(os.path.dirname(prdc_file_path), exist_ok=True)

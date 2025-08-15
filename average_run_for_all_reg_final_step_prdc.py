@@ -64,7 +64,6 @@ def parse_args():
     parser.add_argument("--steps", type=positive_int, default=20000)
     parser.add_argument("--gpu_id", type=non_negative_int, default=0)
     parser.add_argument("--num_samples", type=positive_int, default=10000)
-    parser.add_argument("--seed", type=positive_int, default=42)
     parser.add_argument("-b", "--batch_size", type=positive_int, default=512)
     parser.add_argument("--schedule", type=str, default="linear")
     parser.add_argument("--lr", type=float, default=1e-2)
@@ -243,9 +242,16 @@ if __name__ == "__main__":
         keys = list(all_prdc_values[0].keys())
         header = ["Run"] + keys
         writer.writerow(header)
+
         for i, prdc_dict in enumerate(all_prdc_values, start=1):
             writer.writerow([i] + [prdc_dict[k] for k in keys])
-        writer.writerow(["Mean"] + [np.mean([p[k] for p in all_prdc_values]) for k in keys])
-        writer.writerow(["Std"] + [np.std([p[k] for p in all_prdc_values]) for k in keys])
+
+        # Mean row with empty Reg
+        mean_row = ["Mean"] + ["" if k == "Reg" else np.mean([p[k] for p in all_prdc_values]) for k in keys]
+        writer.writerow(mean_row)
+
+        # Std row with empty Reg
+        std_row = ["Std"] + ["" if k == "Reg" else np.std([p[k] for p in all_prdc_values]) for k in keys]
+        writer.writerow(std_row)
 
     print(f"\nAll combined PRDC results saved in: {csv_path}")

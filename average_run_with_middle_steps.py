@@ -70,7 +70,7 @@ def parse_args():
         default="constant",
         help='Loss weighting type: "constant" or "min_snr"',
     )
-    parser.add_argument("--runs", type=positive_int, default=3, help="Number of runs per reg")
+    parser.add_argument("--runs", type=positive_int, default=10, help="Number of runs per reg")
 
     return parser.parse_args()
 
@@ -138,9 +138,9 @@ if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
 
-    reg_values = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+    reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
     # reg_values = [0]
-    validation_steps = range(args.val_step, args.steps + 1, args.val_step)
+    validation_steps = range(0, args.steps + 1, args.val_step)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     time_str = datetime.now().strftime("%H-%M-%S")
@@ -149,12 +149,13 @@ if __name__ == "__main__":
 
     combined_prdc_stats = []
 
+    ds, train_loader, X_train, X = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed)
+    X_tensor = X_train.to(device)
+    
     for reg in reg_values:
         reg_log_dir = os.path.join(main_log_dir, f"reg_{reg}")
         os.makedirs(reg_log_dir, exist_ok=True)
 
-        ds, train_loader, X_train, X = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed)
-        X_tensor = X_train.to(device)
 
         # List to store all PRDC results for all runs and steps
         prdc_list = []
@@ -169,7 +170,7 @@ if __name__ == "__main__":
             data_iter = iter(train_loader)
             pbar = tqdm(total=args.steps, desc=f"Training reg={reg}", dynamic_ncols=True)
 
-            while step < args.steps:
+            while step < args.steps + 1:
                 try:
                     batch = next(data_iter)
                 except StopIteration:
@@ -188,7 +189,7 @@ if __name__ == "__main__":
                         fake_features=x_gen[0].cpu().numpy(),
                         nearest_k=5
                     )
-                    prdc_list.append((step + 1, prdc_))
+                    prdc_list.append((step , prdc_))
                     model.train()
 
                 step += 1

@@ -6,6 +6,7 @@ import numpy as np
 import os
 import csv
 from datetime import datetime
+from collections import defaultdict
 
 import torch
 from torch.utils.data import TensorDataset, DataLoader
@@ -55,19 +56,21 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description="Model training script")
     parser.add_argument("--dataset", type=str, required=True, help="Dataset name")
-    parser.add_argument(
-        "--loss_weighting_type",
-        type=valid_loss_weighting_type,
-        default="constant",
-        help='Loss weighting type: "constant" or "min_snr"',
-    )
-    parser.add_argument("--steps", type=positive_int, default=20000)
+    parser.add_argument("--steps", type=positive_int, default=40000)
+    parser.add_argument("--val_step", type=positive_int, default=1000)
     parser.add_argument("--seed", type=positive_int, default=42)
     parser.add_argument("--gpu_id", type=non_negative_int, default=0)
     parser.add_argument("--num_samples", type=positive_int, default=10000)
     parser.add_argument("-b", "--batch_size", type=positive_int, default=512)
     parser.add_argument("--schedule", type=str, default="linear")
     parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument(
+        "--loss_weighting_type",
+        type=valid_loss_weighting_type,
+        default="constant",
+        help='Loss weighting type: "constant" or "min_snr"',
+    )
+    parser.add_argument("--runs", type=positive_int, default=3, help="Number of runs per reg")
 
     return parser.parse_args()
 
@@ -92,7 +95,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 
     ds = dataset_classes[dataset_name](num_samples, random_state)
     X = ds.generate()
-    X_train, _ = train_test_split(X, test_size=0.2)
+    X_train, _ = train_test_split(X, test_size=0.2, random_state=random_state)
     X_output = torch.tensor(X_train, dtype=torch.float32)
     train_set = TensorDataset(X_output)
     data_loader = DataLoader(
@@ -102,7 +105,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
         shuffle=True,
         num_workers=2,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
     )
     return ds, data_loader, X_output, X
 
@@ -114,46 +117,6 @@ def create_model(reg, schedule_type, learning_rate):
         num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02)
     )
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
-
-
-def train(model, train_loader, device, loss_weighting_type, steps=150000):
-    model.to(device)
-    train_losses = np.empty(steps, dtype=np.float32)
-    diff_losses = np.empty(steps, dtype=np.float32)
-    norm_losses = np.empty(steps, dtype=np.float32)
-
-    model.train()
-    step = 0
-    data_iter = iter(train_loader)
-    pbar = tqdm(total=steps, desc="Training", dynamic_ncols=True)
-
-    while step < steps:
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(train_loader)
-            batch = next(data_iter)
-
-        x_batch = batch[0].to(device, non_blocking=True)
-        loss, simple_loss, norm_loss = model.train_step(x_batch, loss_weighting_type)
-
-        train_losses[step] = loss
-        diff_losses[step] = simple_loss
-        norm_losses[step] = norm_loss
-
-        if step % 1000 == 0:
-            pbar.set_postfix({
-                'step': step + 1,
-                'loss': train_losses[:step+1].mean(),
-                'simple_loss': diff_losses[:step+1].mean(),
-                'norm_loss': norm_losses[:step+1].mean()
-            })
-
-        pbar.update(1)
-        step += 1
-
-    pbar.close()
-    return train_losses, diff_losses, norm_losses
 
 
 def plot_real_generated_data(x_gen, X_test, save_path):
@@ -171,14 +134,14 @@ def plot_real_generated_data(x_gen, X_test, save_path):
     plt.savefig(save_path)
 
 
-
 if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
 
-    reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    reg_values = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+    # reg_values = [0]
+    validation_steps = range(args.val_step, args.steps + 1, args.val_step)
 
-    # Main log folder for this dataset run
     date_str = datetime.now().strftime("%Y-%m-%d")
     time_str = datetime.now().strftime("%H-%M-%S")
     main_log_dir = f"logs/{args.dataset}_{date_str}_{time_str}"
@@ -191,66 +154,67 @@ if __name__ == "__main__":
         os.makedirs(reg_log_dir, exist_ok=True)
 
         ds, train_loader, X_train, X = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed)
-        X_tensor = torch.Tensor(X).to(device)
+        X_tensor = X_train.to(device)
 
-        prdc_runs = []
+        # List to store all PRDC results for all runs and steps
+        prdc_list = []
 
-        for run_idx in range(3):
-            print(f"\n--- Run {run_idx+1}/3 | reg={reg} ---")
+        for run_idx in range(args.runs):
+            print(f"\n--- Run {run_idx+1}/{args.runs} | reg={reg} ---")
             model = create_model(reg, args.schedule, args.lr)
+            model.to(device)
+            model.train()
 
-            train_losses, diff_losses, norm_losses = train(
-                model, train_loader, device, loss_weighting_type=args.loss_weighting_type, steps=args.steps
-            )
+            step = 0
+            data_iter = iter(train_loader)
+            pbar = tqdm(total=args.steps, desc=f"Training reg={reg}", dynamic_ncols=True)
 
-            model.eval()
-            x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=10000)
-            prdc_ = compute_prdc(real_features=X_tensor.cpu().numpy(),
-                                 fake_features=x_gen[0].cpu().numpy(),
-                                 nearest_k=5)
-            prdc_runs.append(prdc_)
+            while step < args.steps:
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    data_iter = iter(train_loader)
+                    batch = next(data_iter)
 
-            plot_path = os.path.join(reg_log_dir, f'generated_vs_real_plot_run_{run_idx+1}.png')
-            plot_real_generated_data(x_gen[0], X_tensor, save_path=plot_path)
+                x_batch = batch[0].to(device, non_blocking=True)
+                loss, simple_loss, norm_loss = model.train_step(x_batch, args.loss_weighting_type)
 
-        # Compute mean ± std per metric for this reg
-        prdc_mean_std = {"Reg": reg}
-        for k in prdc_runs[0].keys():
-            values = [r[k] for r in prdc_runs]
-            prdc_mean_std[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
-        combined_prdc_stats.append(prdc_mean_std)
+                # Validation PRDC
+                if step in validation_steps:
+                    model.eval()
+                    x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=10000)
+                    prdc_ = compute_prdc(
+                        real_features=X_tensor.cpu().numpy(),
+                        fake_features=x_gen[0].cpu().numpy(),
+                        nearest_k=5
+                    )
+                    prdc_list.append((step + 1, prdc_))
+                    model.train()
 
-        # Save TXT info inside reg folder
-        txt_path = os.path.join(reg_log_dir, "run_info.txt")
-        with open(txt_path, "w") as f:
-            f.write(f"Dataset: {args.dataset}\n")
-            f.write(f"Loss Weighting Type: {args.loss_weighting_type}\n")
-            f.write(f"Reg: {reg}\n")
-            f.write(f"Steps: {args.steps}\n")
-            f.write(f"GPU ID: {args.gpu_id}\n")
-            f.write(f"Num Samples: {args.num_samples}\n")
-            f.write(f"Seed: {args.seed}\n")
-            f.write(f"Batch Size: {args.batch_size}\n")
-            f.write(f"Learning Rate: {args.lr}\n")
-            f.write(f"Schedule: {args.schedule}\n")
-            f.write(f"Log Dir: {reg_log_dir}\n")
-            f.write(f"Run Date: {date_str} {time_str}\n")
+                step += 1
+                pbar.update(1)
+            pbar.close()
 
-    # --- Save combined PRDC CSV outside reg folders ---
-    csv_path = os.path.join(main_log_dir, "prdc_all_regs.csv")
-    csv_columns = ["Reg", "precision", "recall", "density", "coverage"]
-    
+        # Aggregate mean ± std for each step
+        from collections import defaultdict
+        prdc_by_step = defaultdict(list)
+        for step, prdc_dict in prdc_list:
+            prdc_by_step[step].append(prdc_dict)
+
+        for step, prdc_dicts in prdc_by_step.items():
+            mean_std_dict = {"reg": reg, "step": step}
+            for k in prdc_dicts[0].keys():
+                values = [d[k] for d in prdc_dicts]
+                mean_std_dict[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
+            combined_prdc_stats.append(mean_std_dict)
+
+    # Save CSV
+    csv_path = os.path.join(main_log_dir, "prdc_all_regs_steps.csv")
+    csv_columns = ["reg", "step", "precision", "recall", "density", "coverage"]
     with open(csv_path, mode='w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(csv_columns)
-        for stats in combined_prdc_stats:
-            row = [
-                stats["Reg"],
-                stats.get("precision", ""),
-                stats.get("recall", ""),
-                stats.get("density", ""),
-                stats.get("coverage", "")
-            ]
+        writer = csv.DictWriter(f, fieldnames=csv_columns)
+        writer.writeheader()
+        for row in combined_prdc_stats:
             writer.writerow(row)
 
     print(f"\nAll combined PRDC results saved in: {csv_path}")

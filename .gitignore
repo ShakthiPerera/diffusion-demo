@@ -6,4 +6,4 @@ mnist/
 csv_files/
 plots/
 lightning_logs
-
+logs/

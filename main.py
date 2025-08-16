@@ -93,6 +93,8 @@ def parse_args():
     )
     parser.add_argument("--schedule", type=str, default="linear", help="Beta schedule type")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--lr_step_size", type=int, default=10000, help="Step size for StepLR")
+    parser.add_argument("--lr_gamma", type=float, default=0.1, help="Gamma factor for StepLR")
 
     return parser.parse_args()
 
@@ -141,7 +143,7 @@ def create_model(reg, schedule_type, learning_rate):
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
 
 
-def train(model, train_loader, device, loss_weighting_type, steps=150000):
+def train(model, train_loader, device, loss_weighting_type, steps=150000, lr_scheduler=None):
     model.to(device)
     train_losses = np.empty(steps, dtype=np.float32)
     diff_losses = np.empty(steps, dtype=np.float32)
@@ -166,12 +168,17 @@ def train(model, train_loader, device, loss_weighting_type, steps=150000):
         diff_losses[step] = simple_loss
         norm_losses[step] = norm_loss
 
+        if lr_scheduler is not None:
+            lr_scheduler.step()  # update learning rate each step
+
         if step % 1000 == 0:  # Reduce tqdm updates for speed
+            current_lr = lr_scheduler.get_last_lr()[0] if lr_scheduler is not None else model.lr
             pbar.set_postfix({
                 'step': step + 1,
                 'loss': train_losses[:step+1].mean(),
                 'simple_loss': diff_losses[:step+1].mean(),
-                'norm_loss': norm_losses[:step+1].mean()
+                'norm_loss': norm_losses[:step+1].mean(),
+                'lr': current_lr
             })
 
         pbar.update(1)
@@ -218,8 +225,17 @@ if __name__ == "__main__":
     model = create_model(args.reg, args.schedule, args.lr)
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
 
+    # --- StepLR scheduler added ---
+    optimizer = model.optimizer  # assumes ddpm class has an attribute .optimizer
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma
+    )
+
     train_losses, diff_losses, norm_losses = train(
-        model, train_loader, device, loss_weighting_type=args.loss_weighting_type, steps=args.steps
+        model, train_loader, device,
+        loss_weighting_type=args.loss_weighting_type,
+        steps=args.steps,
+        lr_scheduler=lr_scheduler
     )
 
     X_train = X_train.to(device)

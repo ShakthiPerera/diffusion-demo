@@ -64,14 +64,11 @@ def parse_args():
     parser.add_argument("-b", "--batch_size", type=positive_int, default=512)
     parser.add_argument("--schedule", type=str, default="linear")
     parser.add_argument("--lr", type=float, default=1e-2)
-    parser.add_argument(
-        "--loss_weighting_type",
-        type=valid_loss_weighting_type,
-        default="constant",
-        help='Loss weighting type: "constant" or "min_snr"',
-    )
+    parser.add_argument("--loss_weighting_type", type=valid_loss_weighting_type,
+                        default="constant", help='Loss weighting type: "constant" or "min_snr"')
     parser.add_argument("--runs", type=positive_int, default=10, help="Number of runs per reg")
-
+    parser.add_argument("--lr_step", type=positive_int, default=10000, help="Step interval for LR decay")
+    parser.add_argument("--lr_gamma", type=float, default=0.1, help="LR decay factor")
     return parser.parse_args()
 
 
@@ -113,10 +110,9 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 def create_model(reg, schedule_type, learning_rate):
     num_features = [2, 128, 128, 128, 2]
     eps_model = ConditionalDenseModel(num_features, activation="relu", embed_dim=10)
-    betas = make_beta_schedule(
-        num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02)
-    )
-    return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
+    betas = make_beta_schedule(num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02))
+    model = ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
+    return model
 
 
 def plot_real_generated_data(x_gen, X_test, save_path):
@@ -139,7 +135,6 @@ if __name__ == "__main__":
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
 
     reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
-    # reg_values = [0]
     validation_steps = range(0, args.steps + 1, args.val_step)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -151,13 +146,11 @@ if __name__ == "__main__":
 
     ds, train_loader, X_train, X = load_dataset(args.dataset, args.num_samples, args.batch_size, args.seed)
     X_tensor = X_train.to(device)
-    
+
     for reg in reg_values:
         reg_log_dir = os.path.join(main_log_dir, f"reg_{reg}")
         os.makedirs(reg_log_dir, exist_ok=True)
 
-
-        # List to store all PRDC results for all runs and steps
         prdc_list = []
 
         for run_idx in range(args.runs):
@@ -165,6 +158,12 @@ if __name__ == "__main__":
             model = create_model(reg, args.schedule, args.lr)
             model.to(device)
             model.train()
+
+            # --- Optimizer and LR scheduler ---
+            optimizer = model.optimizer
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer, step_size=args.lr_step, gamma=args.lr_gamma
+            )
 
             step = 0
             data_iter = iter(train_loader)
@@ -180,7 +179,9 @@ if __name__ == "__main__":
                 x_batch = batch[0].to(device, non_blocking=True)
                 loss, simple_loss, norm_loss = model.train_step(x_batch, args.loss_weighting_type)
 
-                # Validation PRDC
+                # Step the LR scheduler
+                scheduler.step()
+
                 if step in validation_steps:
                     model.eval()
                     x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=10000)
@@ -189,7 +190,13 @@ if __name__ == "__main__":
                         fake_features=x_gen[0].cpu().numpy(),
                         nearest_k=5
                     )
-                    prdc_list.append((step , prdc_))
+                    prdc_list.append((step, prdc_))
+
+                    # Save plot
+                    plot_path = os.path.join(
+                        reg_log_dir, f'generated_vs_real_run_{run_idx+1}_step_{step}.png'
+                    )
+                    plot_real_generated_data(x_gen[0], X_tensor, save_path=plot_path)
                     model.train()
 
                 step += 1
@@ -197,7 +204,6 @@ if __name__ == "__main__":
             pbar.close()
 
         # Aggregate mean ± std for each step
-        from collections import defaultdict
         prdc_by_step = defaultdict(list)
         for step, prdc_dict in prdc_list:
             prdc_by_step[step].append(prdc_dict)
@@ -209,13 +215,3 @@ if __name__ == "__main__":
                 mean_std_dict[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
             combined_prdc_stats.append(mean_std_dict)
 
-    # Save CSV
-    csv_path = os.path.join(main_log_dir, "prdc_all_regs_steps.csv")
-    csv_columns = ["reg", "step", "precision", "recall", "density", "coverage"]
-    with open(csv_path, mode='w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=csv_columns)
-        writer.writeheader()
-        for row in combined_prdc_stats:
-            writer.writerow(row)
-
-    print(f"\nAll combined PRDC results saved in: {csv_path}")

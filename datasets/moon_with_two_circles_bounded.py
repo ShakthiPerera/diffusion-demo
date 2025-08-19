@@ -22,7 +22,7 @@ class MoonWithTwoCiclesBoundedDataset(BaseDataset2D):
             return self.random_shuffle(params["data"])
         
     def generate_circle_points(self, center, inner_radius, outer_radius, num_points):
-        angles = 2 * np.pi * self.pdf(distribution="uniform", size=num_points)
+        angles = 2 * np.pi * self.pdf(distribution="uniform", size=num_points, params={"low": 0, "high":1})
         radii = np.sqrt(self.pdf(distribution="uniform", params={"low":inner_radius**2, "high":outer_radius**2}, size=num_points))
         X_circle = np.c_[radii * np.cos(angles) + center[0], radii * np.sin(angles) + center[1]]
         return X_circle 

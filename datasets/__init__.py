@@ -14,3 +14,4 @@ from .star_fish_decay import StarFishDecayDataset
 from .star_fish_uniform import StarFishUniformDataset
 from .swiss_roll import SwissRollDataset
 from .two_rings_bounded import TwoRingsBoundedDataset
+from .gaussian_mixture_model import GMMDataset

@@ -26,6 +26,7 @@ from datasets import (
     StarFishUniformDataset,
     SwissRollDataset,
     TwoRingsBoundedDataset,
+    GMMDataset
 )
 from diffusion import ConditionalDenseModel
 from functions import make_beta_schedule
@@ -74,20 +75,14 @@ def parse_args():
 
 def load_dataset(dataset_name, num_samples, batch_size, random_state):
     dataset_classes = {
-        "Banana_with_two_circles": BananaWithTwoCirclesDataset,
-        "Banana": BananaDataset,
         "Central_Banana": CentralBananaDataset,
-        "8_Gaussians": EightGaussiansDataset,
         "Moon_with_scatterings": MoonWithScatteringsDataset,
         "Moon_with_two_circles_bounded": MoonWithTwoCiclesBoundedDataset,
-        "MoonWithTwoCirclesUnboundedDataset": MoonWithTwoCirclesUnboundedDataset,
+        "Moon_with_two_circles_unbounded": MoonWithTwoCirclesUnboundedDataset,
         "Moons": MoonDataset,
-        "Multimodal_Gaussians": MultimodalGasussiansDataset,
         "S_Curve": SCurveDataset,
-        "Star_fish_decay": StarFishDecayDataset,
-        "Star_fish_uniform": StarFishUniformDataset,
         "Swiss_Roll": SwissRollDataset,
-        "Two_rings_bounded": TwoRingsBoundedDataset,
+        "GMM":GMMDataset
     }
 
     ds = dataset_classes[dataset_name](num_samples, random_state)
@@ -128,6 +123,7 @@ def plot_real_generated_data(x_gen, X_test, save_path):
     ax.legend()
     fig.tight_layout()
     plt.savefig(save_path)
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -192,16 +188,14 @@ if __name__ == "__main__":
                     )
                     prdc_list.append((step, prdc_))
 
-                    # Save plot
-                    plot_path = os.path.join(
-                        reg_log_dir, f'generated_vs_real_run_{run_idx+1}_step_{step}.png'
-                    )
-                    plot_real_generated_data(x_gen[0], X_tensor, save_path=plot_path)
                     model.train()
 
                 step += 1
                 pbar.update(1)
             pbar.close()
+            if run_idx == 0:
+                plot_path = os.path.join(reg_log_dir, f'generated_vs_real_final.png')
+                plot_real_generated_data(x_gen[0], X_tensor, save_path=plot_path)
 
         # Aggregate mean ± std for each step
         prdc_by_step = defaultdict(list)
@@ -214,4 +208,13 @@ if __name__ == "__main__":
                 values = [d[k] for d in prdc_dicts]
                 mean_std_dict[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
             combined_prdc_stats.append(mean_std_dict)
+    # Save CSV
+    csv_path = os.path.join(main_log_dir, "prdc_all_regs_steps.csv")
+    csv_columns = ["reg", "step", "precision", "recall", "density", "coverage"]
+    with open(csv_path, mode='w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=csv_columns)
+        writer.writeheader()
+        for row in combined_prdc_stats:
+            writer.writerow(row)
 
+    print(f"\nAll combined PRDC results saved in: {csv_path}")

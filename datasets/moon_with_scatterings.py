@@ -11,9 +11,9 @@ class MoonWithScatteringsDataset(BaseDataset2D):
     def __init__(self, num_samples=10000, dataset_name='Moon_with_scatterings', random_state=42):
         super().__init__(num_samples, dataset_name, random_state)
         
-    def pdf(self, distribution, params, size=None):
+    def pdf(self, distribution):
         if distribution == "standard_normal":
-            return self.random_standard_normal(size)
+            return self.random_standard_normal()
     
     def generate_crescent_with_scatter(self):
         X, y = make_moons(2*self.num_samples - 2*self.scatter_density, noise=self.noise_level, random_state=self.random_state)
@@ -27,9 +27,9 @@ class MoonWithScatteringsDataset(BaseDataset2D):
             x_scattered = x_crescent + self.scatter_band * self.pdf(distribution="standard_normal")
             y_scattered = y_crescent + self.scatter_band * self.pdf(distribution="standard_normal")
             X_scatter.append((x_scattered, y_scattered))
-
+        
+        
         X_scatter = np.array(X_scatter[:self.scatter_density])  # Limit the scatter points to the specified density
-
         X_combined = np.vstack((X_single_crescent, X_scatter))
         return X_combined
     

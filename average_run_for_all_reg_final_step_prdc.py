@@ -52,8 +52,6 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
         "Moon_with_scatterings": MoonWithScatteringsDataset,
         "Moon_with_two_circles_bounded": MoonWithTwoCiclesBoundedDataset,
         "Moon_with_two_circles_unbounded": MoonWithTwoCirclesUnboundedDataset,
-        "Moons": MoonDataset,
-        "S_Curve": SCurveDataset,
         "Swiss_Roll": SwissRollDataset,
         "GMM": GMMDataset
     }
@@ -95,16 +93,16 @@ def train(model, train_loader, device, loss_weighting_type, steps):
 
 def plot_real_generated_data(x_gen, X_test, save_path):
     import matplotlib.pyplot as plt
-    plt.style.use('seaborn')
     fig, ax = plt.subplots(figsize=(6, 5), dpi=300)
     ax.scatter(
-        x_gen[:, 0].cpu().numpy(), x_gen[:, 1].cpu().numpy(),
-        s=10, edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.0), label='Generated'
-    )
+    X_test[:, 0].cpu().numpy(), X_test[:, 1].cpu().numpy(),
+    s=10, edgecolors='none', alpha=0.4, color="#1f77b4", label='Real'   # Blue
+)
     ax.scatter(
-        X_test[:, 0].cpu().numpy(), X_test[:, 1].cpu().numpy(),
-        s=10, edgecolors='none', alpha=0.5, color=plt.cm.cividis(0.8), label='Real'
-    )
+        x_gen[:, 0].cpu().numpy(), x_gen[:, 1].cpu().numpy(),
+    s=10, edgecolors='none', alpha=0.6, color="#ff7f0e", label='Generated'  # Orange
+)
+
     ax.set_xlim(-1.25, 1.25)
     ax.set_ylim(-1.25, 1.25)
     ax.set_aspect('equal', adjustable='box')
@@ -123,7 +121,7 @@ if __name__ == "__main__":
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
     reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     datasets = ["Central_Banana", "Moon_with_scatterings", "Moon_with_two_circles_bounded", 
-                "Moon_with_two_circles_unbounded", "Moons", "S_Curve", "Swiss_Roll", "GMM"]
+                "Moon_with_two_circles_unbounded", "Swiss_Roll", "GMM"]
 
     main_log_dir = f"logs/final_step_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)

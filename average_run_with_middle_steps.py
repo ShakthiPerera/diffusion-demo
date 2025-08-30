@@ -64,12 +64,12 @@ def parse_args():
     parser.add_argument("--num_samples", type=positive_int, default=10000)
     parser.add_argument("-b", "--batch_size", type=positive_int, default=512)
     parser.add_argument("--schedule", type=str, default="linear")
-    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--loss_weighting_type", type=valid_loss_weighting_type,
                         default="constant", help='Loss weighting type: "constant" or "min_snr"')
-    parser.add_argument("--runs", type=positive_int, default=10, help="Number of runs per reg")
-    parser.add_argument("--lr_step", type=positive_int, default=10000, help="Step interval for LR decay")
-    parser.add_argument("--lr_gamma", type=float, default=0.1, help="LR decay factor")
+    parser.add_argument("--runs", type=positive_int, default=3, help="Number of runs per reg")
+    # parser.add_argument("--lr_step", type=positive_int, default=10000, help="Step interval for LR decay")
+    # parser.add_argument("--lr_gamma", type=float, default=0.1, help="LR decay factor")
     return parser.parse_args()
 
 
@@ -78,11 +78,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
         "Central_Banana": CentralBananaDataset,
         "Moon_with_scatterings": MoonWithScatteringsDataset,
         "Moon_with_two_circles_bounded": MoonWithTwoCiclesBoundedDataset,
-        "Moon_with_two_circles_unbounded": MoonWithTwoCirclesUnboundedDataset,
-        "Moons": MoonDataset,
-        "S_Curve": SCurveDataset,
         "Swiss_Roll": SwissRollDataset,
-        "GMM":GMMDataset
     }
 
     ds = dataset_classes[dataset_name](num_samples, random_state)
@@ -104,33 +100,43 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 
 def create_model(reg, schedule_type, learning_rate):
     num_features = [2, 128, 128, 128, 2]
-    eps_model = ConditionalDenseModel(num_features, activation="relu", embed_dim=10)
+    eps_model = ConditionalDenseModel(num_features, activation="relu", embed_dim=128)
     betas = make_beta_schedule(num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02))
     model = ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
     return model
 
 
 def plot_real_generated_data(x_gen, X_test, save_path):
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.scatter(x_gen[:, 0].cpu().numpy(), x_gen[:, 1].cpu().numpy(), s=3,
-               edgecolors='none', alpha=0.7, color=plt.cm.cividis(0.0), label='Generated')
-    ax.scatter(X_test[:, 0].cpu().numpy(), X_test[:, 1].cpu().numpy(), s=3,
-               edgecolors='none', alpha=0.5, color=plt.cm.cividis(0.8), label='Real')
-    ax.set(xlim=(-1.25, 1.25), ylim=(-1.25, 1.25))
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 5), dpi=300)
+    ax.scatter(
+    X_test[:, 0].cpu().numpy(), X_test[:, 1].cpu().numpy(),
+    s=10, edgecolors='none', alpha=0.6, color="#1f77b4", label='Real'   # Blue
+)
+    ax.scatter(
+        x_gen[:, 0].cpu().numpy(), x_gen[:, 1].cpu().numpy(),
+    s=10, edgecolors='none', alpha=0.4, color="#ff7f0e", label='Generated'  # Orange
+)
+
+    ax.set_xlim(-1.25, 1.25)
+    ax.set_ylim(-1.25, 1.25)
     ax.set_aspect('equal', adjustable='box')
-    ax.grid(visible=True, which='both', color='gray', alpha=0.2, linestyle='-')
+    ax.grid(True, which='both', color='gray', alpha=0.2, linestyle='-', zorder=0)
+    ax.set_xlabel('X', fontsize=12)
+    ax.set_ylabel('Y', fontsize=12)
+    ax.tick_params(axis='both', labelsize=10)
+    ax.legend(fontsize=10, loc='best')
     ax.set_axisbelow(True)
-    ax.legend()
     fig.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+    plt.savefig(save_path, format='png', dpi=300, bbox_inches='tight')
+    plt.close(fig)
 
 
 if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
 
-    reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    reg_values = [0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
     validation_steps = range(0, args.steps + 1, args.val_step)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -157,9 +163,9 @@ if __name__ == "__main__":
 
             # --- Optimizer and LR scheduler ---
             optimizer = model.optimizer
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, step_size=args.lr_step, gamma=args.lr_gamma
-            )
+            # scheduler = torch.optim.lr_scheduler.StepLR(
+            #     optimizer, step_size=args.lr_step, gamma=args.lr_gamma
+            # )
 
             step = 0
             data_iter = iter(train_loader)
@@ -175,8 +181,8 @@ if __name__ == "__main__":
                 x_batch = batch[0].to(device, non_blocking=True)
                 loss, simple_loss, norm_loss = model.train_step(x_batch, args.loss_weighting_type)
 
-                # Step the LR scheduler
-                scheduler.step()
+                # # Step the LR scheduler
+                # scheduler.step()
 
                 if step in validation_steps:
                     model.eval()

@@ -35,13 +35,13 @@ def compute_mmd(X, Y, kernel_type='rbf'):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=20000)
+    parser.add_argument("--steps", type=int, default=100000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
-    parser.add_argument("--num_samples", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--num_samples", type=int, default=100000)
+    parser.add_argument("--batch_size", type=int, default=1000)
     parser.add_argument("--schedule", type=str, default="linear")
-    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--lr", type=float, default=0.0005)
     parser.add_argument("--loss_weighting_type", type=str, default="constant", choices=["constant", "min_snr"])
     parser.add_argument("--runs", type=int, default=10)
     return parser.parse_args()
@@ -68,7 +68,7 @@ def create_model(reg, schedule_type, learning_rate):
 
 def train(model, train_loader, device, loss_weighting_type, steps):
     model.to(device).train()
-    scheduler = StepLR(model.optimizer, step_size=5000, gamma=0.1)
+    # scheduler = StepLR(model.optimizer, step_size=20000, gamma=0.1)
     step = 0
     data_iter = iter(train_loader)
     pbar = tqdm(total=steps, desc="Training")
@@ -86,7 +86,7 @@ def train(model, train_loader, device, loss_weighting_type, steps):
         avg_loss = total_loss / step
         if step % 1000 == 1:
             pbar.set_postfix({"Avg Loss": f"{avg_loss:.6f}", "LR": f"{model.optimizer.param_groups[0]['lr']:.6f}"})
-        scheduler.step()
+        # scheduler.step()
         pbar.update(1)
     pbar.close()
     return model
@@ -120,9 +120,9 @@ if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
     reg_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    datasets = ["Central_Banana", "Moon_with_scatterings", "Moon_with_two_circles_bounded", 
-                "Moon_with_two_circles_unbounded", "Swiss_Roll", "GMM"]
-
+    # datasets = ["Central_Banana", "Moon_with_scatterings", "Moon_with_two_circles_bounded", 
+                # "Moon_with_two_circles_unbounded", "Swiss_Roll", "GMM"]
+    datasets = ["GMM"]
     main_log_dir = f"logs/final_step_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)
 
@@ -142,7 +142,7 @@ if __name__ == "__main__":
         for reg in reg_values:
             reg_log_dir = os.path.join(dataset_log_dir, f"reg_{reg}")
             os.makedirs(reg_log_dir, exist_ok=True)
-            metrics_runs = []
+            # metrics_runs = []
 
             for run_idx in range(args.runs):
                 print(f"\n--- Dataset: {dataset_name} | Run {run_idx+1}/{args.runs} | reg={reg} ---")
@@ -150,26 +150,26 @@ if __name__ == "__main__":
                 model = train(model, train_loader, device, args.loss_weighting_type, args.steps)
                 model.eval()
                 x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=args.num_samples)
-                prdc_ = compute_prdc(real_features=X_tensor.cpu().numpy(), fake_features=x_gen[0].cpu().numpy(), nearest_k=5)
-                metrics_runs.append({
-                    **prdc_, 
-                    'wasserstein': compute_wasserstein_2(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy()),
-                    'linear_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'linear'),
-                    'poly_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'poly'),
-                    'rbf_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'rbf')
-                })
+                # prdc_ = compute_prdc(real_features=X_tensor.cpu().numpy(), fake_features=x_gen[0].cpu().numpy(), nearest_k=5)
+                # metrics_runs.append({
+                #     **prdc_, 
+                #     'wasserstein': compute_wasserstein_2(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy()),
+                #     'linear_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'linear'),
+                #     'poly_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'poly'),
+                #     'rbf_mmd': compute_mmd(X_tensor.cpu().numpy(), x_gen[0].cpu().numpy(), 'rbf')
+                # })
                 plot_real_generated_data(x_gen[0], X_tensor, os.path.join(reg_log_dir, f'generated_vs_real_run_{run_idx+1}.png'))
 
-            metrics_mean_std = {'Reg': reg}
-            for k in metrics_runs[0].keys():
-                values = [r[k] for r in metrics_runs]
-                metrics_mean_std[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
-            combined_metrics.append(metrics_mean_std)
+        #     metrics_mean_std = {'Reg': reg}
+        #     for k in metrics_runs[0].keys():
+        #         values = [r[k] for r in metrics_runs]
+        #         metrics_mean_std[k] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
+        #     combined_metrics.append(metrics_mean_std)
 
-        csv_path = os.path.join(dataset_log_dir, "metrics_all_regs.csv")
-        with open(csv_path, mode='w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["Reg", "precision", "recall", "density", "coverage", "wasserstein", "linear_mmd", "poly_mmd", "rbf_mmd"])
-            for stats in combined_metrics:
-                writer.writerow([stats.get(col, '') for col in ["Reg", "precision", "recall", "density", "coverage", "wasserstein", "linear_mmd", "poly_mmd", "rbf_mmd"]])
-        print(f"\nMetrics for {dataset_name} saved in: {csv_path}")
+        # csv_path = os.path.join(dataset_log_dir, "metrics_all_regs.csv")
+        # with open(csv_path, mode='w', newline='') as f:
+        #     writer = csv.writer(f)
+        #     writer.writerow(["Reg", "precision", "recall", "density", "coverage", "wasserstein", "linear_mmd", "poly_mmd", "rbf_mmd"])
+        #     for stats in combined_metrics:
+        #         writer.writerow([stats.get(col, '') for col in ["Reg", "precision", "recall", "density", "coverage", "wasserstein", "linear_mmd", "poly_mmd", "rbf_mmd"]])
+        # print(f"\nMetrics for {dataset_name} saved in: {csv_path}")

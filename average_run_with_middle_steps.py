@@ -186,7 +186,7 @@ if __name__ == "__main__":
 
                 if step in validation_steps:
                     model.eval()
-                    x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=10000)
+                    x_gen = model.generate(sample_shape=X_tensor[0].shape, num_samples=8000)
                     prdc_ = compute_prdc(
                         real_features=X_tensor.cpu().numpy(),
                         fake_features=x_gen[0].cpu().numpy(),

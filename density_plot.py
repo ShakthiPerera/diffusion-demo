@@ -211,7 +211,6 @@ if __name__ == "__main__":
     datasets = [
         "Central_Banana",
         "Moon_with_scatterings",
-        "Moon_with_two_circles_bounded",
         "Moon_with_two_circles_unbounded",
         "Swiss_Roll",
     ]

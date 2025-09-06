@@ -35,14 +35,14 @@ def compute_mmd(X, Y, kernel_type='rbf'):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=40000)
+    parser.add_argument("--steps", type=int, default=156250)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--num_samples", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--schedule", type=str, default="linear")
     parser.add_argument("--logdir", type=str, default="logs")
-    parser.add_argument("--lr", type=float, default=0.0005)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--loss_weighting_type", type=str, default="constant", choices=["constant", "min_snr"])
     parser.add_argument("--runs", type=int, default=3)  # Overridden to 3 as per request
     return parser.parse_args()
@@ -62,7 +62,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 
 def create_model(reg, schedule_type, learning_rate):
     eps_model = ConditionalDenseModel([2, 128, 128, 128, 2], activation="relu", embed_dim=12)
-    betas = make_beta_schedule(num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02))
+    betas = make_beta_schedule(num_steps=1000, mode=schedule_type, beta_range=(1e-04, 0.02))
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
 
 def train(model, train_loader, device, loss_weighting_type, steps):
@@ -119,9 +119,8 @@ if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
     reg_values = [0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    datasets = ["Central_Banana", "Moon_with_scatterings", 
-                "Moon_with_two_circles_unbounded", "Swiss_Roll"]
-    main_log_dir = f"{args.logdir}/final_step_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    datasets = ["Moon_with_two_circles_unbounded", "Central_Banana", "Moon_with_scatterings", "Swiss_Roll"]
+    main_log_dir = f"{args.logdir}/final_step_best_reg_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)
 
     with open(os.path.join(main_log_dir, "settings.txt"), "w") as f:

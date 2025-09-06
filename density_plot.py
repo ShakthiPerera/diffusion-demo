@@ -53,7 +53,7 @@ def get_asymmetric_bins_counts(counts: np.ndarray) -> np.ndarray:
     #     hi = lo + 1
     # # Use percentiles to create a dynamic spread
     # percentiles = np.percentile(counts, [0.1, 0.7, 2])
-    bins = [lo, int(lo + 0.5*(hi-lo)), int(lo + 0.1*(hi-lo)),int(lo + 0.2*(hi-lo)), hi]
+    bins = [lo, int(lo + 0.05*(hi-lo)), int(lo + 0.1*(hi-lo)),int(lo + 0.2*(hi-lo)), hi]
     bins = np.maximum.accumulate(bins)
     if len(np.unique(bins)) < 5:
         bins = np.linspace(lo, hi, 5)
@@ -100,11 +100,11 @@ def plot_color_coded_points(data: np.ndarray, values: np.ndarray, save_path: str
     """
     if is_generated:
         bins = get_asymmetric_bins_counts(values)
-        colors = ['blue', 'lightblue', 'lightcoral', 'red']
+        colors = ["#0202BC", "#71C6E2", "#DD4F4F", "#ED0202"]  # blue, lightblue, lightcoral, red
         label = 'Points within k-NN radius'
     else:
         bins = get_asymmetric_bins_radii(values)
-        colors = ['red', 'lightcoral', 'lightblue', 'blue']  # Reversed for training data
+        colors = ["#0202BC", "#71C6E2", "#DD4F4F", "#ED0202"][::-1]  # blue, lightblue, lightcoral, red
         label = 'k-NN radius'
 
     cmap = ListedColormap(colors)
@@ -139,15 +139,15 @@ def plot_color_coded_points(data: np.ndarray, values: np.ndarray, save_path: str
 # -----------------------------
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=20000)
+    parser.add_argument("--steps", type=int, default=40000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--num_samples", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=500)
     parser.add_argument("--schedule", type=str, default="linear")
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--loss_weighting_type", type=str, default="constant", choices=["constant", "min_snr"])
-    parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--nearest_k", type=int, default=5)
     return parser.parse_args()
 
@@ -177,7 +177,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 
 def create_model(reg, schedule_type, learning_rate):
     eps_model = ConditionalDenseModel([2, 128, 128, 128, 2], activation="relu", embed_dim=128)
-    diffusion_steps = 200 
+    diffusion_steps = 1000 
     betas = make_beta_schedule(num_steps=diffusion_steps, mode=schedule_type, beta_range=(1e-04, 0.02))
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
 
@@ -207,7 +207,7 @@ def train(model, train_loader, device, loss_weighting_type, steps, dataset_name)
 if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
-    reg_values = [0.0]
+    reg_values = [0.0, 0.01, 0.02, 0.04, 0.1, 0.2, 0.3, 0.5]
     datasets = [
         "Central_Banana",
         "Moon_with_scatterings",

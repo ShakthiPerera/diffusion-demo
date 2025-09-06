@@ -67,7 +67,7 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
 
 def create_model(reg, schedule_type, learning_rate, reg_type):
     eps_model = ConditionalDenseModel([2, 128, 128, 128, 2], activation="relu", embed_dim=12)
-    betas = make_beta_schedule(num_steps=200, mode=schedule_type, beta_range=(1e-04, 0.02))
+    betas = make_beta_schedule(num_steps=1000, mode=schedule_type, beta_range=(1e-04, 0.02))
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg, reg_type=reg_type)
 
 
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     reg_types = ['iso', 'mean_l2', 'var_l2', 'skew', 'kurt', 'var_mi', 'kl', 'mmd_rbf', 'mmd_linear']
     datasets = ["Central_Banana", "Moon_with_scatterings",
                 "Moon_with_two_circles_unbounded", "Swiss_Roll"]
-    main_log_dir = f"{args.logdir}/final_step_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    main_log_dir = f"{args.logdir}/final_step_best_metric_running_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)
 
     with open(os.path.join(main_log_dir, "settings.txt"), "w") as f:

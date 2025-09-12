@@ -72,8 +72,7 @@ def create_model(reg, schedule_type, learning_rate):
 
 def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
     model.to(device).train()
-    warmup_steps = int(0.05*steps)
-    cosine_scheduler = CosineAnnealingLR(model.optimizer, T_max=steps - warmup_steps, eta_min=1e-6)
+    cosine_scheduler = CosineAnnealingLR(model.optimizer, T_max=steps, eta_min=1e-4)
     step = 0
     data_iter = iter(train_loader)
     pbar = tqdm(total=steps, desc="Training")

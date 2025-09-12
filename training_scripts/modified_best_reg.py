@@ -136,7 +136,7 @@ if __name__ == "__main__":
         dataset_log_dir = os.path.join(main_log_dir, dataset_name)
         os.makedirs(dataset_log_dir, exist_ok=True)
         ds, train_loader, val_loader, X_train, X = load_dataset(dataset_name, args.num_samples, args.batch_size, args.seed)
-        X_tensor = torch.tensor(X, dtype=torch.float32).to(device)
+        X_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
 
         combined_metrics = []
         for reg in reg_values:
@@ -189,4 +189,3 @@ if __name__ == "__main__":
                       [entry['mean_std'].get(f"{col}_pct_diff", '0.00%') for col in metrics_keys]
                 writer.writerow(row)
         print(f"\nMetrics for {dataset_name} saved in: {csv_path}")
-</xai

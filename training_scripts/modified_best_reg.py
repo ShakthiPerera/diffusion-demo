@@ -28,10 +28,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--num_samples", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--schedule", type=str, default="cosine")
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--schedule", type=str, default="linear")
     parser.add_argument("--logdir", type=str, default="logs")
-    parser.add_argument("--lr", type=float, default=0.0002)  # Conservative LR for stability
+    parser.add_argument("--lr", type=float, default=0.001)  # Conservative LR for stability
     parser.add_argument("--loss_weighting_type", type=str, default="constant", choices=["constant", "min_snr"])
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--dataset", type=str, default="Moon_with_two_circles_unbounded", 

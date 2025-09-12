@@ -66,15 +66,13 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
     return ds, train_loader, val_loader, X_train_tensor, X
 
 def create_model(reg, schedule_type, learning_rate):
-    eps_model = ConditionalDenseModel([2, 128, 128, 128, 2], activation="relu", embed_dim=2)
+    eps_model = ConditionalDenseModel([2, 128, 128, 128, 2], activation="relu", embed_dim=12)
     betas = make_beta_schedule(num_steps=1000, mode=schedule_type, beta_range=(1e-04, 0.02))
     return ddpm(eps_model=eps_model, betas=betas, criterion="mse", lr=learning_rate, reg=reg)
 
 def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
     model.to(device).train()
     warmup_steps = int(0.05*steps)
-    def warmup_lambda(step): return min(1.0, step / warmup_steps)
-    warmup_scheduler = LambdaLR(model.optimizer, lr_lambda=warmup_lambda)
     cosine_scheduler = CosineAnnealingLR(model.optimizer, T_max=steps - warmup_steps, eta_min=1e-6)
     step = 0
     data_iter = iter(train_loader)
@@ -94,10 +92,7 @@ def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
         if step % 1000 == 0:
             val_loss = model.validate(val_loader)
             pbar.set_postfix({"Avg Loss": f"{avg_loss:.6f}", "Val Loss": f"{val_loss:.6f}"})
-        if step < warmup_steps:
-            warmup_scheduler.step()
-        else:
-            cosine_scheduler.step()
+        cosine_scheduler.step()
         pbar.update(1)
     pbar.close()
     return model

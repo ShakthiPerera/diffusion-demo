@@ -52,9 +52,9 @@ def load_dataset(dataset_name, num_samples, batch_size, random_state):
         "Moon_with_two_circles_unbounded": MoonWithTwoCirclesUnboundedDataset,
         "Swiss_Roll": SwissRollDataset,
     }
-    ds = dataset_classes[dataset_name](num_samples, random_state)
+    ds = dataset_classes[dataset_name](2*num_samples, random_state)
     X = ds.generate()
-    X_train, X_val = train_test_split(X, test_size=0.2, random_state=random_state)
+    X_train, X_val = train_test_split(X, test_size=0.5, random_state=random_state)
     X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
     X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
     train_loader = DataLoader(TensorDataset(X_train_tensor), batch_size=batch_size, drop_last=True, shuffle=True, num_workers=2, pin_memory=True)

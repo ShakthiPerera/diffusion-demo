@@ -5,7 +5,6 @@ from datetime import datetime
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from prdc import compute_prdc
@@ -72,7 +71,6 @@ def create_model(reg, schedule_type, learning_rate):
 
 def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
     model.to(device).train()
-    scheduler = ReduceLROnPlateau(model.optimizer, mode='min', factor=0.1, patience=2, min_lr=1e-5, verbose=True, threshold=1e-3)
     step = 0
     data_iter = iter(train_loader)
     pbar = tqdm(total=steps, desc="Training")
@@ -91,7 +89,6 @@ def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
         if step % 1000 == 0:
             val_loss = model.validate(val_loader)
             pbar.set_postfix({"Avg Loss": f"{avg_loss:.6f}", "Val Loss": f"{val_loss:.6f}"})
-            scheduler.step(val_loss)  # Step scheduler with validation loss
         pbar.update(1)
     pbar.close()
     return model
@@ -192,3 +189,4 @@ if __name__ == "__main__":
                       [entry['mean_std'].get(f"{col}_pct_diff", '0.00%') for col in metrics_keys]
                 writer.writerow(row)
         print(f"\nMetrics for {dataset_name} saved in: {csv_path}")
+</xai

@@ -5,7 +5,7 @@ from datetime import datetime
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from prdc import compute_prdc
@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--schedule", type=str, default="cosine")
     parser.add_argument("--logdir", type=str, default="logs")
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.0002)  # Conservative LR for stability
     parser.add_argument("--loss_weighting_type", type=str, default="constant", choices=["constant", "min_snr"])
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--dataset", type=str, default="Moon_with_two_circles_unbounded", 
@@ -72,7 +72,7 @@ def create_model(reg, schedule_type, learning_rate):
 
 def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
     model.to(device).train()
-    cosine_scheduler = CosineAnnealingLR(model.optimizer, T_max=steps, eta_min=1e-4)
+    scheduler = ReduceLROnPlateau(model.optimizer, mode='min', factor=0.1, patience=2, min_lr=1e-5, verbose=True, threshold=1e-3)
     step = 0
     data_iter = iter(train_loader)
     pbar = tqdm(total=steps, desc="Training")
@@ -91,7 +91,7 @@ def train(model, train_loader, val_loader, device, loss_weighting_type, steps):
         if step % 1000 == 0:
             val_loss = model.validate(val_loader)
             pbar.set_postfix({"Avg Loss": f"{avg_loss:.6f}", "Val Loss": f"{val_loss:.6f}"})
-        cosine_scheduler.step()
+            scheduler.step(val_loss)  # Step scheduler with validation loss
         pbar.update(1)
     pbar.close()
     return model
@@ -123,7 +123,7 @@ def plot_real_generated_data(x_gen, X_test, save_path):
 if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
-    reg_values = np.linspace(0.2, 0.4, 10)  # Uniformly distributed from 0 to 1.0 with 20 points
+    reg_values = np.linspace(0.2, 0.4, 10)
     datasets = [args.dataset]
     main_log_dir = f"{args.logdir}/{args.dataset}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)
@@ -132,7 +132,7 @@ if __name__ == "__main__":
         f.write("Training Settings\n=================\n\n")
         for arg, val in vars(args).items():
             f.write(f"{arg}: {val}\n")
-        f.write(f"Regularization values: {list(np.round(reg_values, 4))}\n")  # Log the reg values
+        f.write(f"Regularization values: {list(np.round(reg_values, 4))}\n")
         f.write("\nModel Settings\nHidden layers: [2, 128, 128, 128, 2]\nActivation: relu\nEmbedding dim: 2\nBeta schedule: num_steps=1000, range=(1e-4, 0.02)\nEMA decay: 0.995\nOptimizer: AdamW with weight_decay=0.01\n")
 
     for dataset_name in datasets:
@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
         combined_metrics = []
         for reg in reg_values:
-            reg_log_dir = os.path.join(dataset_log_dir, f"reg_{reg:.4f}")  # Format reg dir with 4 decimals
+            reg_log_dir = os.path.join(dataset_log_dir, f"reg_{reg:.4f}")
             os.makedirs(reg_log_dir, exist_ok=True)
             metrics_runs = []
 
@@ -170,7 +170,7 @@ if __name__ == "__main__":
                 means[k] = mean_val
             combined_metrics.append({'Reg': reg, 'mean_std': metrics_mean_std, 'means': means})
 
-        reg0_means = next((entry['means'] for entry in combined_metrics if abs(entry['Reg']) < 1e-6), None)  # Find reg ≈ 0
+        reg0_means = next((entry['means'] for entry in combined_metrics if abs(entry['Reg']) < 1e-6), None)
         if reg0_means:
             for entry in combined_metrics:
                 for k in metrics_keys:

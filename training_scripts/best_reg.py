@@ -22,7 +22,7 @@ from diffusion.ddpm_norms import DDPM as ddpm
 
 def compute_wasserstein_2(real, fake):
     return np.mean([wasserstein_distance(real[:, i], fake[:, i]) for i in range(real.shape[1])])
-d
+
 def compute_mmd(X, Y, kernel_type='rbf'):
     kernel = {
         'linear': linear_kernel,

@@ -10,7 +10,7 @@ from tqdm import tqdm
 from prdc import compute_prdc
 import sys
 
-project_path = 'diffusion-demo'
+project_path = '/content/drive/MyDrive/Diffusion/diffusion-demo'
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
@@ -120,7 +120,8 @@ def plot_real_generated_data(x_gen, X_test, save_path):
 if __name__ == "__main__":
     args = parse_args()
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
-    reg_values = np.linspace(0.2, 0.4, 10)
+    reg_values = [0.0]
+    reg_values.extend(np.linspace(0.2, 0.4, 10))
     datasets = [args.dataset]
     main_log_dir = f"{args.logdir}/{args.dataset}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(main_log_dir, exist_ok=True)

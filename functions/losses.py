@@ -12,10 +12,10 @@ def iso_loss(x, eps_pred, eps, criterion):
         
     loss = criterion(eps_pred, eps)
     
-    squared_trace_eps = torch.mean(torch.sum(eps_pred**2, dim=2))
+    squared_trace_eps = torch.mean(eps_pred**2) #torch.mean(torch.sum(eps_pred**2, dim=2))
+    
+    # normalized_squared_trace_eps = squared_trace_eps / torch.tensor(2.0, requires_grad=False)
 
-    normalized_squared_trace_eps = squared_trace_eps / torch.tensor(2.0, requires_grad=False)
-
-    norm_loss = 1.0 - normalized_squared_trace_eps
+    norm_loss = 1.0 - squared_trace_eps
 
     return loss, norm_loss

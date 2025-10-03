@@ -305,24 +305,6 @@ def process_objective(base_dir: Path, dataset: str, objective: str, runs: Iterab
     dataset_dir = base_dir / dataset
     run_to_regmap = collect_prdc_across_runs(dataset_dir, dataset, objective, runs, select_by, min_step, max_step)
 
-    # Per-run outputs
-    for run_id, regmap in run_to_regmap.items():
-        df_run = df_from_regmap_single(regmap)
-        if df_run.empty:
-            continue
-        outdir_run = ensure_outdir(base_dir, dataset, objective, f"run_{run_id}")
-        df_pct_run = pct_change_vs_baseline(df_run)
-        # Summaries
-        (outdir_run / "summary_means.csv").write_text(df_run.to_csv())
-        (outdir_run / "summary_pct_change.csv").write_text(df_pct_run.round(3).to_csv())
-        # Plots per metric
-        # Concise title for readability; keep details in filename only
-        title = f"{dataset} · {objective} · run {run_id}"
-        suffix = f"_by-{select_by}"
-        if (min_step is not None) or (max_step is not None):
-            suffix += f"_steps-{min_step if min_step is not None else 'min'}-{max_step if max_step is not None else 'max'}"
-        plot_bars_per_metric(df_pct_run, title_prefix=title, outdir=outdir_run, filename_suffix=suffix)
-
     # Mean across runs (only where present)
     df_mean = df_from_regmaps_mean(run_to_regmap)
     if not df_mean.empty:
@@ -368,7 +350,7 @@ def main():
                 continue
         for obj in objectives:
             process_objective(base, ds, obj, args.runs, args.select_by, args.min_step, args.max_step)
-            print(f"[OK] {ds}/{obj}: bar plots saved (per-run and mean).")
+            print(f"[OK] {ds}/{obj}: bar plots saved (mean run only).")
 
 
 if __name__ == "__main__":

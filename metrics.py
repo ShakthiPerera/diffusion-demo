@@ -47,7 +47,28 @@ References
 from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics import pairwise_distances
+try:
+    from sklearn.metrics import pairwise_distances  # type: ignore
+except Exception:
+    import numpy as _np
+
+    def pairwise_distances(X: _np.ndarray, Y: _np.ndarray | None = None, metric: str = 'euclidean', n_jobs: int = 1) -> _np.ndarray:  # noqa: N802
+        """Minimal NumPy fallback for pairwise distances (euclidean only).
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples_X, n_features)
+        Y : ndarray of shape (n_samples_Y, n_features) or None
+        metric : str (only 'euclidean' supported)
+        n_jobs : int (ignored)
+        """
+        if metric != 'euclidean':
+            raise ValueError("Only 'euclidean' metric is supported in fallback")
+        if Y is None:
+            Y = X
+        # (n_x, 1, d) - (1, n_y, d) -> (n_x, n_y, d)
+        diff = X[:, None, :] - Y[None, :, :]
+        return _np.sqrt(_np.sum(diff * diff, axis=-1, dtype=_np.float64))
 
 __all__ = ['compute_prdc']
 

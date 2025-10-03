@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
                         help='Number of optimisation steps.')
     parser.add_argument('--batch_size', type=int, default=500,
                         help='Batch size for training.')
-    parser.add_argument('--lr', type=float, default=4e-4,
+    parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate for Adam optimiser.')
     parser.add_argument('--criterion', type=str, default='mse', choices=['mse', 'l1'],
                         help='Loss criterion to use.')
@@ -101,6 +101,8 @@ def parse_args() -> argparse.Namespace:
                               'training loop will be repeated for each value in the list.'))
     parser.add_argument('--save_every', type=int, default=1250,
                         help='Save a checkpoint every N optimisation steps (0 disables periodic saving).')
+    parser.add_argument('--gpu_id', type=int, default=0,
+                        help='GPU ID Number.')
 
     parser.add_argument('--run_suffix', type=str, default='',
                         help=('Optional suffix appended to the regularisation type directory to '
@@ -174,8 +176,10 @@ def main(args: argparse.Namespace) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     # generate the full dataset once; reused across different runs
+    # Use a dataset-specific default noise level for moon_circles
+    used_noise_level = 0.1 if args.dataset.lower() == 'moon_circles' else args.noise_level
     ds = Synthetic2DDataset(name=args.dataset, num_samples=args.num_samples,
-                            noise_level=args.noise_level, random_state=args.random_state)
+                            noise_level=used_noise_level, random_state=args.random_state)
     X = ds.generate()  # numpy array (num_samples, 2)
     # split into training and validation sets if requested
     val_split = float(args.val_split)
@@ -246,7 +250,7 @@ def main(args: argparse.Namespace) -> None:
             f.write('-' * 40 + '\n')
             f.write(f'dataset_name: {args.dataset}\n')
             f.write(f'num_samples: {args.num_samples}\n')
-            f.write(f'noise_level: {args.noise_level}\n')
+            f.write(f'noise_level: {used_noise_level}\n')
             f.write(f'random_state: {args.random_state}\n')
             f.write(f'num_diffusion_steps: {args.num_diffusion_steps}\n')
             f.write(f'schedule: {args.schedule}\n')
@@ -292,7 +296,7 @@ def main(args: argparse.Namespace) -> None:
         # instantiate the conditional dense model used in the original codebase
         dims = [2] + [args.hidden_dim] * args.num_layers + [2]
         eps_model = ConditionalDenseModel(dims, activation='relu', embed_dim=args.embed_dim)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device(f'cuda:{args.gpu_id}' if torch.cuda.is_available() else 'cpu')
         model = GenericDDPM(eps_model=eps_model, betas=betas,
                             criterion=args.criterion, lr=args.lr,
                             ema_decay=args.ema_decay, device=device,

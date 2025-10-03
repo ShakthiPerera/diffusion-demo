@@ -225,7 +225,7 @@ class ConditionalDense(nn.Module):
     addition.
     """
     def __init__(self, in_features: int, out_features: int,
-                 activation: str = 'relu', embed_dim: int | None = None) -> None:
+                 activation: str = 'relu', embed_dim: int = 64) -> None:
         super().__init__()
         self.linear = nn.Linear(in_features, out_features)
         self.activation = make_activation(activation)
@@ -255,7 +255,7 @@ class ConditionalDenseModel(nn.Module):
     hidden layers of width 128 followed by an output layer of width 2.
     Each layer receives a learnable embedding of the timestep.
     """
-    def __init__(self, num_features, activation: str = 'swish', embed_dim: int | None = None) -> None:
+    def __init__(self, num_features, activation: str = 'swish', embed_dim: int  = 64) -> None:
         super().__init__()
         if len(num_features) < 2:
             raise ValueError('Number of features needs at least two entries')

@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--reg_values', type=str, default=None,
                         help=('Comma‑separated list of regularisation strengths.  When provided, the '
                               'training loop will be repeated for each value in the list.'))
-    parser.add_argument('--save_every', type=int, default=1250,
+    parser.add_argument('--save_every', type=int, default=5000,
                         help='Save a checkpoint every N optimisation steps (0 disables periodic saving).')
     parser.add_argument('--gpu_id', type=int, default=0,
                         help='GPU ID Number.')

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Set a deterministic cuBLAS workspace configuration if not provided
-export CUBLAS_WORKSPACE_CONFIG=${CUBLAS_WORKSPACE_CONFIG:-:16:8}
+# export CUBLAS_WORKSPACE_CONFIG=${CUBLAS_WORKSPACE_CONFIG:-:16:8}
 
 # All supported datasets
 DATASETS=(
@@ -28,17 +28,6 @@ echo "Comparing SNR-DDPM vs ISO (reg=0.3 with SNR) across datasets"
 for DATASET in "${DATASETS[@]}"; do
   echo "\nDataset: ${DATASET}"
 
-  # 1) SNR-DDPM baseline: no regularisation (reg_strength=0.0), SNR weighting
-  echo "  Running SNR-DDPM baseline (reg=0.0, weighting=snr)"
-  python train.py \
-    --dataset "${DATASET}" \
-    --weighting snr \
-    --reg_type iso \
-    --reg_strength 0.0 \
-    --run_suffix snr_ddpm \
-    --random_state "${SEED}" \
-    "$@"
-
   # 2) ISO with reg=0.3 and SNR weighting
   echo "  Running ISO (reg=0.01, weighting=snr)"
   python train.py \
@@ -48,6 +37,7 @@ for DATASET in "${DATASETS[@]}"; do
     --reg_strength 0.01 \
     --run_suffix snr_iso_reg0.01 \
     --random_state "${SEED}" \
+    --gpu_id 4 \
     "$@"
 done
 

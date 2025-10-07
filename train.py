@@ -63,11 +63,11 @@ def parse_args() -> argparse.Namespace:
                         help='Number of diffusion steps (T).')
     parser.add_argument('--schedule', type=str, default='linear', choices=['linear', 'quadratic', 'cosine', 'sigmoid'],
                         help='Type of beta schedule to use.')
-    parser.add_argument('--train_steps', type=int, default=25_000,
+    parser.add_argument('--train_steps', type=int, default=50_000,
                         help='Number of optimisation steps.')
     parser.add_argument('--batch_size', type=int, default=500,
                         help='Batch size for training.')
-    parser.add_argument('--lr', type=float, default=1e-3,
+    parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate for Adam optimiser.')
     parser.add_argument('--criterion', type=str, default='mse', choices=['mse', 'l1'],
                         help='Loss criterion to use.')

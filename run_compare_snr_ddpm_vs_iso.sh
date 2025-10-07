@@ -40,13 +40,13 @@ for DATASET in "${DATASETS[@]}"; do
     "$@"
 
   # 2) ISO with reg=0.3 and SNR weighting
-  echo "  Running ISO (reg=0.3, weighting=snr)"
+  echo "  Running ISO (reg=0.01, weighting=snr)"
   python train.py \
     --dataset "${DATASET}" \
     --weighting snr \
     --reg_type iso \
-    --reg_strength 0.3 \
-    --run_suffix snr_iso_reg0.3 \
+    --reg_strength 0.01 \
+    --run_suffix snr_iso_reg0.01 \
     --random_state "${SEED}" \
     "$@"
 done

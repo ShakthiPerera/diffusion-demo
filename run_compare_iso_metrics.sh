@@ -32,7 +32,17 @@ ISO_REG_TYPES=(
 
 for DATASET in "${SELECTED_DATASETS[@]}"; do
   echo ""
-  echo "Dataset: ${DATASET} | reg_strength=${REG_STRENGTH}"
+  echo "Dataset: ${DATASET}"
+  echo "  -> Baseline DDPM (reg_type=iso, reg_strength=0.0)"
+  python train.py \
+    --dataset "${DATASET}" \
+    --weighting constant \
+    --reg_strength 0.0 \
+    --reg_type iso \
+    --run_suffix "${RUN_SUFFIX}_baseline" \
+    --random_state "${SEED}" \
+    "${EXTRA_ARGS[@]}"
+  echo "  -> Isotropy sweep (reg_strength=${REG_STRENGTH})"
   for REG_TYPE in "${ISO_REG_TYPES[@]}"; do
     echo "  -> Training with reg_type=${REG_TYPE}"
     python train.py \

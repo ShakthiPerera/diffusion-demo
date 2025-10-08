@@ -300,7 +300,8 @@ class GenericDDPM(nn.Module):
         # compute regularisation loss on predicted noise
         reg_loss = 0.0
         if self.reg_strength > 0.0:
-            reg_loss = self._compute_reg_loss(pred_noise, noise)
+            reg_weights = base_w if (weighting == 'snr' and self.reg_type == 'iso') else None
+            reg_loss = self._compute_reg_loss(pred_noise, noise, weights=reg_weights)
         # assemble final loss depending on weighting type
         if weighting == 'snr':
             total_loss = weighted_mse + reg_loss
@@ -357,8 +358,9 @@ class GenericDDPM(nn.Module):
             simple_mse = mse_scalar.mean()
             reg_loss = 0.0
             if self.reg_strength > 0.0:
+                reg_weights = base_w if (weighting == 'snr' and self.reg_type == 'iso') else None
                 # compute regularisation on predicted noise (requires gradients but we are in no_grad)
-                reg_loss = self._compute_reg_loss(pred_noise, noise)
+                reg_loss = self._compute_reg_loss(pred_noise, noise, weights=reg_weights)
             if weighting == 'snr':
                 total_loss = weighted_mse + reg_loss
             else:
@@ -414,7 +416,8 @@ class GenericDDPM(nn.Module):
             self.train()
         return total / max(count, 1)
 
-    def _compute_reg_loss(self, eps_pred: torch.Tensor, eps_true: torch.Tensor) -> torch.Tensor:
+    def _compute_reg_loss(self, eps_pred: torch.Tensor, eps_true: torch.Tensor,
+                          weights: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute regularisation loss on predicted noise.
 
         This implements a variety of regularisation objectives matching those
@@ -438,9 +441,20 @@ class GenericDDPM(nn.Module):
         dim = float(eps_true.shape[-1])
         # choose loss term
         if self.reg_type == 'iso':
-            squared_norm_pred = torch.sum(eps_pred ** 2, dim=1).mean() / dim
-            squared_norm_true = torch.tensor(1.0, device=eps_pred.device)
-            norm_loss = self.loss_fn(squared_norm_pred, squared_norm_true)
+            # compute per-sample squared norm to allow optional weighting
+            squared_norm_pred = torch.sum(eps_pred ** 2, dim=1) / dim
+            target = torch.ones_like(squared_norm_pred)
+            if weights is not None:
+                # match the weighting behaviour used for the diffusion loss
+                if isinstance(self.loss_fn, nn.MSELoss):
+                    per_sample_loss = (squared_norm_pred - target) ** 2
+                else:
+                    per_sample_loss = (squared_norm_pred - target).abs()
+                norm_loss = (weights * per_sample_loss).mean()
+            else:
+                squared_norm_mean = squared_norm_pred.mean()
+                squared_norm_true = torch.tensor(1.0, device=eps_pred.device)
+                norm_loss = self.loss_fn(squared_norm_mean, squared_norm_true)
         elif self.reg_type == 'mean_l2':
             mean_pred = eps_pred.mean(dim=0).mean()
             mean_true = torch.tensor(0.0, device=eps_pred.device)

@@ -25,7 +25,7 @@ DATASETS=(
 SCHEDULES=(cosine linear quadratic sigmoid)
 
 # Single seed for a single run per (dataset,schedule)
-SEED=${SEED:-42}
+SEED=${SEED:-41}
 
 echo "Running DDPM schedule sweep across datasets"
 

@@ -91,7 +91,8 @@ def parse_args() -> argparse.Namespace:
                         help=('Strength of the regularisation term applied to the predicted noise.  '
                               'If ``--reg_values`` is provided this value is ignored.'))
     parser.add_argument('--reg_type', type=str, default='iso',
-                        choices=['iso', 'mean_l2', 'var_l2', 'skew', 'kurt', 'var_mi', 'kl', 'mmd_linear', 'mmd_rbf'],
+                        choices=['iso', 'iso_frob', 'iso_split', 'iso_logeig', 'iso_bures',
+                                 'mean_l2', 'var_l2', 'skew', 'kurt', 'var_mi', 'kl', 'mmd_linear', 'mmd_rbf'],
                         help='Type of regularisation to apply to the predicted noise.')
     parser.add_argument('--snr_gamma', type=float, default=5.0,
                         help=('Saturation parameter for SNR weighting.  Larger values make the weighting '

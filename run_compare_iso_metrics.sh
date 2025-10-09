@@ -41,7 +41,9 @@ for DATASET in "${SELECTED_DATASETS[@]}"; do
     --reg_type iso \
     --run_suffix "${RUN_SUFFIX}_baseline" \
     --random_state "${SEED}" \
+    --gpu_id 6 \
     "${EXTRA_ARGS[@]}"
+
   echo "  -> Isotropy sweep (reg_strength=${REG_STRENGTH})"
   for REG_TYPE in "${ISO_REG_TYPES[@]}"; do
     echo "  -> Training with reg_type=${REG_TYPE}"
@@ -52,6 +54,7 @@ for DATASET in "${SELECTED_DATASETS[@]}"; do
       --reg_type "${REG_TYPE}" \
       --run_suffix "${RUN_SUFFIX}" \
       --random_state "${SEED}" \
+      --gpu_id 6 \
       "${EXTRA_ARGS[@]}"
   done
 done

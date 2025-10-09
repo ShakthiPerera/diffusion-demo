@@ -29,13 +29,13 @@ for DATASET in "${DATASETS[@]}"; do
   echo "\nDataset: ${DATASET}"
 
   # 2) ISO with reg=0.3 and SNR weighting
-  echo "  Running ISO (reg=0.01, weighting=constant)"
+  echo "  Running ISO (reg=0.3, weighting=constant)"
   python train.py \
     --dataset "${DATASET}" \
-    --weighting constant \
+    --weighting snr \
     --reg_type iso \
-    --reg_strength 0.01 \
-    --run_suffix constant_iso_reg0.01 \
+    --reg_strength 0.3 \
+    --run_suffix snr_iso_reg0.3 \
     --random_state "${SEED}" \
     --gpu_id 4 \
     "$@"

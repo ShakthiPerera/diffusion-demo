@@ -300,7 +300,12 @@ class GenericDDPM(nn.Module):
         # compute regularisation loss on predicted noise
         reg_loss = 0.0
         if self.reg_strength > 0.0:
-            reg_loss = self._compute_reg_loss(pred_noise, noise)
+            if self.reg_type == 'iso':
+                iso_loss = self._compute_reg_loss(pred_noise, noise, reduction='none')
+                iso_weights = base_w if weighting == 'snr' else torch.ones_like(base_w)
+                reg_loss = (iso_loss * iso_weights).mean()
+            else:
+                reg_loss = self._compute_reg_loss(pred_noise, noise)
         # assemble final loss depending on weighting type
         if weighting == 'snr':
             total_loss = weighted_mse + reg_loss
@@ -358,7 +363,12 @@ class GenericDDPM(nn.Module):
             reg_loss = 0.0
             if self.reg_strength > 0.0:
                 # compute regularisation on predicted noise (requires gradients but we are in no_grad)
-                reg_loss = self._compute_reg_loss(pred_noise, noise)
+                if self.reg_type == 'iso':
+                    iso_loss = self._compute_reg_loss(pred_noise, noise, reduction='none')
+                    iso_weights = base_w if weighting == 'snr' else torch.ones_like(base_w)
+                    reg_loss = (iso_loss * iso_weights).mean()
+                else:
+                    reg_loss = self._compute_reg_loss(pred_noise, noise)
             if weighting == 'snr':
                 total_loss = weighted_mse + reg_loss
             else:
@@ -414,7 +424,8 @@ class GenericDDPM(nn.Module):
             self.train()
         return total / max(count, 1)
 
-    def _compute_reg_loss(self, eps_pred: torch.Tensor, eps_true: torch.Tensor) -> torch.Tensor:
+    def _compute_reg_loss(self, eps_pred: torch.Tensor, eps_true: torch.Tensor,
+                          reduction: str = 'mean') -> torch.Tensor:
         """Compute regularisation loss on predicted noise.
 
         This implements a variety of regularisation objectives matching those
@@ -428,12 +439,20 @@ class GenericDDPM(nn.Module):
             Predicted noise residuals.
         eps_true : Tensor of shape (batch_size, dim)
             True noise residuals drawn from a unit Gaussian.
+        reduction : {'mean', 'sum', 'none'}, optional
+            Aggregation mode for the isotropy loss.  ``'none'`` returns the
+            per-sample penalties (ISO only).  Default is ``'mean'``.
 
         Returns
         -------
-        Tensor (scalar)
-            Scaled regularisation loss ``reg_strength * norm_loss``.
+        Tensor
+            When ``reduction`` is ``'none'`` (ISO only) returns a tensor with
+            one entry per batch element.  Otherwise returns a scalar tensor
+            equal to ``reg_strength`` multiplied by the requested reduction of
+            the regularisation loss.
         """
+        if reduction not in ('mean', 'sum', 'none'):
+            raise ValueError(f"Unknown reduction '{reduction}'.")
         # dimension of the feature space
         dim = float(eps_true.shape[-1])
         # choose loss term
@@ -442,9 +461,14 @@ class GenericDDPM(nn.Module):
             squared_norm_per_sample = iso_stats['squared_norm_per_sample']
             cov = iso_stats['cov']
             if self.reg_type == 'iso':
-                squared_norm_mean = squared_norm_per_sample.mean()
-                squared_norm_true = torch.tensor(1.0, device=eps_pred.device, dtype=eps_pred.dtype)
-                reg_val = self.loss_fn(squared_norm_mean, squared_norm_true)
+                iso_error = (squared_norm_per_sample - 1.0) ** 2
+                if reduction == 'none':
+                    return self.reg_strength * iso_error
+                if reduction == 'sum':
+                    return self.reg_strength * iso_error.sum()
+                return self.reg_strength * iso_error.mean()
+            if reduction == 'none':
+                raise ValueError(f"Reduction 'none' not supported for reg_type '{self.reg_type}'.")
             elif self.reg_type == 'iso_frob':
                 eye = torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
                 diff = cov - eye

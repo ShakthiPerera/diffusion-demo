@@ -15,6 +15,8 @@ Directory expectations under --base_dir (default: outputs):
   <dataset>/iso_run_<id>/reg_<reg>/checkpoints/checkpoint_prdc_metrics_<dataset>_reg_<reg>.csv
   <dataset>/iso_snr_ddpm/reg_<reg>/checkpoints/checkpoint_prdc_metrics_<dataset>_reg_<reg>.csv
   <dataset>/iso_snr_iso_reg<reg>/reg_<reg>/checkpoints/checkpoint_prdc_metrics_<dataset>_reg_<reg>.csv
+  <dataset>/iso_constant_ddpm/reg_<reg>/checkpoints/checkpoint_prdc_metrics_<dataset>_reg_<reg>.csv
+  <dataset>/iso_constant_iso_reg<reg>/reg_<reg>/checkpoints/checkpoint_prdc_metrics_<dataset>_reg_<reg>.csv
 
 Outputs per dataset are written to:
   results/prdc_vs_training_methods/<dataset>/
@@ -197,6 +199,18 @@ def mean_metrics(metric_list: List[Dict[str, float]]) -> Dict[str, float]:
     return {k: float(np.mean(vals)) for k, vals in data.items() if vals}
 
 
+METHOD_DIRECTORY_TEMPLATES = {
+    "snr": (
+        Path("iso_snr_ddpm"),
+        lambda reg_iso: Path(f"iso_snr_iso_reg{reg_iso}"),
+    ),
+    "constant": (
+        Path("iso_constant_ddpm"),
+        lambda reg_iso: Path(f"iso_constant_iso_reg{reg_iso}"),
+    ),
+}
+
+
 def compute_method_summary(
     dataset_dir: Path,
     dataset: str,
@@ -228,9 +242,10 @@ def compute_method_summary(
             if ddpm_metrics and iso_metrics:
                 ddpm_metrics_all.append(ddpm_metrics)
                 iso_metrics_all.append(iso_metrics)
-    elif method == "snr":
-        ddpm_dir = dataset_dir / "iso_snr_ddpm" / f"reg_{reg_ddpm}"
-        iso_dir = dataset_dir / f"iso_snr_iso_reg{reg_iso}" / f"reg_{reg_iso}"
+    elif method in METHOD_DIRECTORY_TEMPLATES:
+        ddpm_root, iso_root_fn = METHOD_DIRECTORY_TEMPLATES[method]
+        ddpm_dir = dataset_dir / ddpm_root / f"reg_{reg_ddpm}"
+        iso_dir = dataset_dir / iso_root_fn(reg_iso) / f"reg_{reg_iso}"
         if ddpm_dir.exists() and iso_dir.exists():
             ddpm_metrics = load_metrics_with_fallback(
                 ddpm_dir, dataset, reg_ddpm, checkpoint_mode="last",
@@ -280,7 +295,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--datasets", type=str, nargs="+", required=True, help="Datasets to process.")
     ap.add_argument("--runs", type=int, nargs="*", default=[1], help="Run IDs to average for standard training.")
     ap.add_argument("--methods", type=str, nargs="*", default=["standard", "snr"],
-                    choices=["standard", "snr"], help="Training methods to include.")
+                    choices=["standard", "snr", "constant"], help="Training methods to include.")
     ap.add_argument("--reg_ddpm", type=float, default=0.0, help="Regularisation value for DDPM baselines.")
     ap.add_argument("--reg_iso", type=float, default=0.3, help="Regularisation value for ISO runs.")
     ap.add_argument("--iso_select_by", type=str, default="density", choices=PRDC_METRICS,
@@ -356,4 +371,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

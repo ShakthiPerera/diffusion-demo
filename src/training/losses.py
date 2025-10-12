@@ -9,12 +9,13 @@ mirror the behaviour that previously lived inside ``GenericDDPM``.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import torch
 
 
 LossStats = Dict[str, torch.Tensor]
+RegLossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 ISO_REG_TYPES = {"iso", "iso_frob", "iso_split", "iso_logeig", "iso_bures"}
 
 
@@ -36,7 +37,7 @@ def diffusion_loss(
     weighting: str,
     snr_gamma: float,
     reg_type: str,
-    reg_loss_fn: Callable[..., torch.Tensor],
+    reg_loss_fn: Optional[RegLossFn],
 ) -> Tuple[torch.Tensor, LossStats]:
     """Compute the diffusion objective and optional regularisation."""
     mse = (pred_noise - true_noise) ** 2
@@ -47,14 +48,9 @@ def diffusion_loss(
     simple_mse = mse_scalar.mean()
 
     device = pred_noise.device
-    reg_loss = torch.zeros(1, device=device)
+    reg_loss = torch.zeros((), device=device)
     if reg_loss_fn is not None:
-        if reg_type == "iso":
-            iso_loss = reg_loss_fn(pred_noise, true_noise, reduction="none")
-            iso_weights = weights if weighting == "snr" else torch.ones_like(weights)
-            reg_loss = (iso_loss * iso_weights).mean()
-        else:
-            reg_loss = reg_loss_fn(pred_noise, true_noise, reduction="mean")
+        reg_loss = reg_loss_fn(pred_noise, true_noise)
 
     if weighting == "snr":
         total_loss = weighted_mse + reg_loss
@@ -70,52 +66,35 @@ def diffusion_loss(
     return total_loss, stats
 
 
-def _zero_reg_loss(eps_pred: torch.Tensor, _eps_true: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
-    if reduction == "none":
-        return torch.zeros(eps_pred.size(0), device=eps_pred.device, dtype=eps_pred.dtype)
+def _zero_reg_loss(eps_pred: torch.Tensor, _eps_true: torch.Tensor) -> torch.Tensor:
     return torch.zeros((), device=eps_pred.device, dtype=eps_pred.dtype)
 
 
 def _isotropy_statistics(eps: torch.Tensor) -> Dict[str, torch.Tensor]:
-    batch_size, dim = eps.shape
-    mean = eps.mean(dim=0, keepdim=True)
-    centered = eps - mean
-    cov = centered.transpose(0, 1) @ centered / float(batch_size)
-    cov = 0.5 * (cov + cov.transpose(0, 1))
-    squared_norm_per_sample = eps.pow(2).sum(dim=1) / float(dim)
+    batch_size = eps.shape[0]
+    cov = eps.transpose(0, 1) @ eps / float(batch_size)
     return {
         "cov": cov,
-        "squared_norm_per_sample": squared_norm_per_sample,
     }
 
 
 def _iso_family_loss(
     eps_pred: torch.Tensor,
     reg_type: str,
-    reduction: str,
 ) -> torch.Tensor:
     stats = _isotropy_statistics(eps_pred)
     cov = stats["cov"]
-    squared_norm = stats["squared_norm_per_sample"]
-    if reg_type == "iso":
-        iso_error = (squared_norm - 1.0) ** 2
-        if reduction == "none":
-            return iso_error
-        if reduction == "sum":
-            return iso_error.sum()
-        if reduction == "mean":
-            return iso_error.mean()
-        raise ValueError(f"Unknown reduction '{reduction}'.")
-    if reduction == "none":
-        raise ValueError(f"Reduction 'none' not supported for reg_type '{reg_type}'.")
     eye = torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
+    if reg_type == "iso":
+        mean_sq = eps_pred.flatten().square().mean()
+        return (mean_sq - 1.0).square()
     if reg_type == "iso_frob":
         diff = cov - eye
-        return (diff * diff).sum()
+        return (diff * diff).mean()
     if reg_type == "iso_split":
         diag = torch.diagonal(cov)
         off = cov - torch.diag(diag)
-        return off.pow(2).sum() + (diag.mean() - 1.0) ** 2
+        return off.pow(2).mean() + (diag.mean() - 1.0) ** 2
     jitter = 1e-5
     eigvals = torch.linalg.eigvalsh(cov + jitter * eye)
     if reg_type == "iso_logeig":
@@ -129,7 +108,7 @@ def build_reg_loss_fn(
     reg_type: str,
     reg_strength: float,
     criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-) -> Callable[..., torch.Tensor]:
+) -> RegLossFn:
     reg_type = reg_type.lower()
     reg_strength = float(reg_strength)
     if reg_strength <= 0.0:
@@ -139,9 +118,8 @@ def build_reg_loss_fn(
         def _iso_reg_loss(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            base = _iso_family_loss(eps_pred, reg_type=reg_type, reduction=reduction)
+            base = _iso_family_loss(eps_pred, reg_type=reg_type)
             return reg_strength * base
         return _iso_reg_loss
 
@@ -149,10 +127,7 @@ def build_reg_loss_fn(
         def _mean_l2(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for mean_l2.")
             mean_pred = eps_pred.mean(dim=0).mean()
             mean_true = torch.tensor(0.0, device=eps_pred.device, dtype=eps_pred.dtype)
             return reg_strength * criterion(mean_pred, mean_true)
@@ -162,10 +137,7 @@ def build_reg_loss_fn(
         def _var_l2(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for var_l2.")
             var_pred = eps_pred.var(dim=0).mean()
             var_true = torch.tensor(1.0, device=eps_pred.device, dtype=eps_pred.dtype)
             return reg_strength * criterion(var_pred, var_true)
@@ -175,10 +147,7 @@ def build_reg_loss_fn(
         def _skew(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for skew.")
             mu = eps_pred.mean(dim=0)
             std = eps_pred.std(dim=0) + 1e-8
             skew_pred = ((eps_pred - mu) ** 3).mean(dim=0) / (std ** 3)
@@ -190,10 +159,7 @@ def build_reg_loss_fn(
         def _kurt(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for kurt.")
             mu = eps_pred.mean(dim=0)
             std = eps_pred.std(dim=0) + 1e-8
             kurt_pred = ((eps_pred - mu) ** 4).mean(dim=0) / (std ** 4) - 3.0
@@ -205,10 +171,7 @@ def build_reg_loss_fn(
         def _var_mi(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for var_mi.")
             mean_pred_samples = eps_pred.mean(dim=1)
             mean_true_samples = eps_true.mean(dim=1)
             var_pred = mean_pred_samples.var()
@@ -220,10 +183,7 @@ def build_reg_loss_fn(
         def _kl(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for kl.")
             d = eps_true.shape[-1]
             mu_p = eps_pred.mean(dim=0)
             cov_p = torch.cov(eps_pred.t()) + 1e-6 * torch.eye(d, device=eps_pred.device, dtype=eps_pred.dtype)
@@ -244,10 +204,7 @@ def build_reg_loss_fn(
         def _mmd(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
-            reduction: str = "mean",
         ) -> torch.Tensor:
-            if reduction == "none":
-                raise ValueError("Reduction 'none' not supported for MMD.")
             m, n = eps_pred.shape[0], eps_true.shape[0]
             if kernel == "linear":
                 Kxx = eps_pred @ eps_pred.t()

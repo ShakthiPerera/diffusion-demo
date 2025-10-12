@@ -78,12 +78,72 @@ def checkpoint_metrics_path(run_dir: Path, dataset: str, reg_value: float) -> Pa
     return run_dir / "checkpoints" / f"checkpoint_prdc_metrics_{dataset}_reg_{reg_str}.csv"
 
 
+def _clean_metric_floor(value: Optional[float]) -> Optional[float]:
+    """Convert a floor value to float if possible; otherwise return None."""
+    if value is None:
+        return None
+    try:
+        value_f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(value_f):
+        return None
+    return value_f
+
+
+def _metrics_from_row(row: pd.Series) -> Dict[str, float]:
+    """Extract PRDC metrics from a dataframe row."""
+    metrics: Dict[str, float] = {}
+    for metric in PRDC_METRICS:
+        if metric in row:
+            try:
+                metrics[metric] = float(row[metric])
+            except (TypeError, ValueError):
+                metrics[metric] = np.nan
+    return metrics
+
+
+def _has_precision_and_density(metrics: Dict[str, float]) -> bool:
+    """Check that both precision and density values are usable for comparisons."""
+    return (
+        _clean_metric_floor(metrics.get("precision")) is not None
+        and _clean_metric_floor(metrics.get("density")) is not None
+    )
+
+
+def read_checkpoint_table(
+    csv_path: Path,
+    min_step: Optional[int],
+    max_step: Optional[int],
+) -> Optional[pd.DataFrame]:
+    """Load checkpoint PRDC metrics as a dataframe with optional step filtering."""
+    if not csv_path.exists():
+        return None
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception:
+        return None
+    needed = {"step", *PRDC_METRICS}
+    if not needed.issubset(df.columns) or df.empty:
+        return None
+    if (min_step is not None) or (max_step is not None):
+        lo = min_step if min_step is not None else int(df["step"].min())
+        hi = max_step if max_step is not None else int(df["step"].max())
+        df_f = df[(df["step"] >= lo) & (df["step"] <= hi)]
+        if df_f.empty:
+            df_f = df
+    else:
+        df_f = df
+    return df_f
+
+
 def read_checkpoint_metrics(
     csv_path: Path,
     mode: str,
     select_by: str,
     min_step: Optional[int],
     max_step: Optional[int],
+    metric_floors: Optional[Dict[str, float]],
 ) -> Dict[str, float]:
     if not csv_path.exists():
         return {}
@@ -102,6 +162,22 @@ def read_checkpoint_metrics(
             df_f = df
     else:
         df_f = df
+    if metric_floors:
+        floors: Dict[str, float] = {
+            metric: floor
+            for metric, floor in (
+                (m, _clean_metric_floor(v)) for m, v in metric_floors.items()
+            )
+            if floor is not None and metric in df_f.columns
+        }
+        if floors:
+            mask = np.ones(len(df_f), dtype=bool)
+            for metric, floor in floors.items():
+                mask &= df_f[metric] > floor
+            df_filtered = df_f[mask]
+            if df_filtered.empty:
+                return {}
+            df_f = df_filtered
     if mode == "last":
         row = df_f.sort_values("step").iloc[-1]
     elif mode == "best":
@@ -125,6 +201,7 @@ def load_metrics_with_fallback(
     select_by: str,
     min_step: Optional[int],
     max_step: Optional[int],
+    metric_floors: Optional[Dict[str, float]],
 ) -> Dict[str, float]:
     ckpt_path = checkpoint_metrics_path(run_dir, dataset, reg_value)
     metrics = read_checkpoint_metrics(
@@ -133,11 +210,29 @@ def load_metrics_with_fallback(
         select_by=select_by,
         min_step=min_step,
         max_step=max_step,
+        metric_floors=metric_floors,
     )
     if metrics:
-        return metrics
-    csv_path = run_dir / f"prdc_metrics_{dataset}_reg_{reg_value}.csv"
-    return read_prdc_metrics_csv(csv_path)
+        pass
+    else:
+        csv_path = run_dir / f"prdc_metrics_{dataset}_reg_{reg_value}.csv"
+        metrics = read_prdc_metrics_csv(csv_path)
+    if metrics and metric_floors:
+        for metric, floor in (
+            (m, _clean_metric_floor(v)) for m, v in metric_floors.items()
+        ):
+            if floor is None:
+                continue
+            value = metrics.get(metric)
+            if value is None:
+                return {}
+            try:
+                value_f = float(value)
+            except (TypeError, ValueError):
+                return {}
+            if np.isnan(value_f) or value_f <= floor:
+                return {}
+    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +343,7 @@ def compute_schedule_tables(
     rows: List[Dict[str, float]] = []
     for schedule in schedules:
         ddpm_dir, iso_dir = schedule_dirs(schedule)
-        ddpm_metrics = load_metrics_with_fallback(
+        ddpm_metrics_base = load_metrics_with_fallback(
             ddpm_dir,
             dataset,
             reg_ddpm,
@@ -256,19 +351,52 @@ def compute_schedule_tables(
             select_by=iso_select_by,
             min_step=min_step,
             max_step=max_step,
+            metric_floors=None,
         )
-        iso_metrics = load_metrics_with_fallback(
-            iso_dir,
-            dataset,
-            reg_iso,
-            checkpoint_mode="best",
-            select_by=iso_select_by,
+        ddpm_ckpt_df = read_checkpoint_table(
+            checkpoint_metrics_path(ddpm_dir, dataset, reg_ddpm),
             min_step=min_step,
             max_step=max_step,
         )
-        if not ddpm_metrics or not iso_metrics:
+
+        ddpm_candidates: List[Dict[str, float]] = []
+        if ddpm_metrics_base:
+            ddpm_candidates.append(ddpm_metrics_base)
+        if ddpm_ckpt_df is not None:
+            df_sorted = ddpm_ckpt_df.sort_values("step", ascending=False)
+            for _, row in df_sorted.iterrows():
+                metric_row = _metrics_from_row(row)
+                if metric_row:
+                    ddpm_candidates.append(metric_row)
+
+        selected_ddpm_metrics: Optional[Dict[str, float]] = None
+        iso_metrics: Optional[Dict[str, float]] = None
+        for ddpm_candidate in ddpm_candidates:
+            if not _has_precision_and_density(ddpm_candidate):
+                continue
+            metric_floors = {
+                "precision": ddpm_candidate.get("precision"),
+                "density": ddpm_candidate.get("density"),
+            }
+            iso_candidate = load_metrics_with_fallback(
+                iso_dir,
+                dataset,
+                reg_iso,
+                checkpoint_mode="best",
+                select_by=iso_select_by,
+                min_step=min_step,
+                max_step=max_step,
+                metric_floors=metric_floors,
+            )
+            if iso_candidate:
+                selected_ddpm_metrics = ddpm_candidate
+                iso_metrics = iso_candidate
+                break
+
+        if selected_ddpm_metrics is None or iso_metrics is None:
             print(f"[WARN] {dataset}/{schedule}: missing PRDC metrics (ddpm_dir={ddpm_dir.exists()}, iso_dir={iso_dir.exists()})")
             continue
+        ddpm_metrics = selected_ddpm_metrics
         row = {"schedule": schedule}
         for metric in PRDC_METRICS:
             ddpm_val = ddpm_metrics.get(metric, np.nan)

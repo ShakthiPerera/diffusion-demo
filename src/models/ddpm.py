@@ -341,15 +341,7 @@ class GenericDDPM(nn.Module):
         weights = snr_weights(snr, self.snr_gamma)
         weighted_mse = (mse_scalar * weights).mean()
         simple_mse = mse_scalar.mean()
-        if self.reg_strength > 0.0:
-            if self.reg_type == 'iso':
-                iso_loss = self.reg_loss_fn(pred_eps, noise, reduction='none')
-                iso_weights = weights if weighting == 'snr' else torch.ones_like(weights)
-                reg_loss = (iso_loss * iso_weights).mean()
-            else:
-                reg_loss = self.reg_loss_fn(pred_eps, noise, reduction='mean')
-        else:
-            reg_loss = torch.tensor(0.0, device=pred_eps.device, dtype=pred_eps.dtype)
+        reg_loss = self.reg_loss_fn(pred_eps, noise)
         primary = weighted_mse if weighting == 'snr' else simple_mse
         return primary + reg_loss
 

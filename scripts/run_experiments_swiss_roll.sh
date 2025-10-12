@@ -36,7 +36,7 @@ for reg_type in "${REG_TYPES[@]}"; do
     echo "\nStarting repeat ${run} with random_state=${seed} and run_suffix=${run_suffix}"  
     # Pass --enable_metrics only for the first run to collect detailed norms/iso metrics.
     if [ "$run" -eq 1 ]; then
-      python train.py \
+      python main.py --method ddpm \
         --dataset "${DATASET}" \
         --reg_type "${reg_type}" \
         --reg_values "${REG_VALUES}" \
@@ -46,7 +46,7 @@ for reg_type in "${REG_TYPES[@]}"; do
         --save_intermediate \
         "$@"
     else
-      python train.py \
+      python main.py --method ddpm \
         --dataset "${DATASET}" \
         --reg_type "${reg_type}" \
         --reg_values "${REG_VALUES}" \

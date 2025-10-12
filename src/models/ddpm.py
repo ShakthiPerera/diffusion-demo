@@ -22,9 +22,8 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from schedules import make_beta_schedule
+from ..schedules.schedules import make_beta_schedule
+from ..training.losses import diffusion_loss, build_reg_loss_fn
 
 
 class SimpleMLP(nn.Module):
@@ -210,6 +209,7 @@ class GenericDDPM(nn.Module):
         # regularisation parameters
         self.reg_strength = float(reg_strength)
         self.reg_type = reg_type
+        self.reg_loss_fn = build_reg_loss_fn(self.reg_type, self.reg_strength, self.loss_fn)
         # gamma parameter controlling SNR weighting saturation
         self.snr_gamma = float(snr_gamma)
         # optimiser
@@ -281,36 +281,16 @@ class GenericDDPM(nn.Module):
         t = torch.randint(0, self.betas.size(0), (batch_size,), device=device)
         x_t, noise = self.diffuse(x0, t)
         pred_noise = self.eps_model(x_t, t)
-        # mean squared error per sample and per feature
-        mse = (pred_noise - noise) ** 2  # shape (batch_size, dim)
-        # compute SNR per sample
-        alpha_bar = self.alphas_cumprod[t]  # shape (batch_size,)
-        snr = alpha_bar / (1.0 - alpha_bar + 1e-8)
-        # compute weighting factor for SNR weighting
-        # clipping the SNR by ``snr_gamma`` corresponds to the min‑SNR
-        # weighting proposed in the Improved DDPMs paper.  When the
-        # ``weighting`` argument to :meth:`train_step` is ``'snr'`` this
-        # factor will be applied; otherwise the unweighted loss is used.
-        base_w = torch.minimum(snr, torch.full_like(snr, self.snr_gamma)) / snr
-        # scalar MSE per sample
-        mse_scalar = mse.mean(dim=1)  # shape (batch_size,)
-        # weighted and unweighted loss components
-        weighted_mse = (mse_scalar * base_w).mean()
-        simple_mse = mse_scalar.mean()
-        # compute regularisation loss on predicted noise
-        reg_loss = 0.0
-        if self.reg_strength > 0.0:
-            if self.reg_type == 'iso':
-                iso_loss = self._compute_reg_loss(pred_noise, noise, reduction='none')
-                iso_weights = base_w if weighting == 'snr' else torch.ones_like(base_w)
-                reg_loss = (iso_loss * iso_weights).mean()
-            else:
-                reg_loss = self._compute_reg_loss(pred_noise, noise)
-        # assemble final loss depending on weighting type
-        if weighting == 'snr':
-            total_loss = weighted_mse + reg_loss
-        else:
-            total_loss = simple_mse + reg_loss
+        alpha_bar = self.alphas_cumprod[t]
+        total_loss, _ = diffusion_loss(
+            pred_noise=pred_noise,
+            true_noise=noise,
+            alphas_cumprod_t=alpha_bar,
+            weighting=weighting,
+            snr_gamma=self.snr_gamma,
+            reg_type=self.reg_type,
+            reg_loss_fn=self.reg_loss_fn,
+        )
         # optimisation step
         self.optimizer.zero_grad()
         total_loss.backward()
@@ -351,28 +331,16 @@ class GenericDDPM(nn.Module):
         with torch.no_grad():
             x_t, noise = self.diffuse(x0, t)
             pred_noise = self.eps_model(x_t, t)
-            # mean squared error per sample and per feature
-            mse = (pred_noise - noise) ** 2
-            mse_scalar = mse.mean(dim=1)  # shape (batch_size,)
-            # compute SNR per sample
             alpha_bar = self.alphas_cumprod[t]
-            snr = alpha_bar / (1.0 - alpha_bar + 1e-8)
-            base_w = torch.minimum(snr, torch.full_like(snr, self.snr_gamma)) / snr
-            weighted_mse = (mse_scalar * base_w).mean()
-            simple_mse = mse_scalar.mean()
-            reg_loss = 0.0
-            if self.reg_strength > 0.0:
-                # compute regularisation on predicted noise (requires gradients but we are in no_grad)
-                if self.reg_type == 'iso':
-                    iso_loss = self._compute_reg_loss(pred_noise, noise, reduction='none')
-                    iso_weights = base_w if weighting == 'snr' else torch.ones_like(base_w)
-                    reg_loss = (iso_loss * iso_weights).mean()
-                else:
-                    reg_loss = self._compute_reg_loss(pred_noise, noise)
-            if weighting == 'snr':
-                total_loss = weighted_mse + reg_loss
-            else:
-                total_loss = simple_mse + reg_loss
+            total_loss, _ = diffusion_loss(
+                pred_noise=pred_noise,
+                true_noise=noise,
+                alphas_cumprod_t=alpha_bar,
+                weighting=weighting,
+                snr_gamma=self.snr_gamma,
+                reg_type=self.reg_type,
+                reg_loss_fn=self.reg_loss_fn,
+            )
         return float(total_loss.detach().item())
 
     def evaluate(self, dataloader, weighting: str = 'constant') -> float:
@@ -424,138 +392,6 @@ class GenericDDPM(nn.Module):
             self.train()
         return total / max(count, 1)
 
-    def _compute_reg_loss(self, eps_pred: torch.Tensor, eps_true: torch.Tensor,
-                          reduction: str = 'mean') -> torch.Tensor:
-        """Compute regularisation loss on predicted noise.
-
-        This implements a variety of regularisation objectives matching those
-        available in the original codebase.  The goal of these penalties
-        is to encourage the predicted noise distribution to match the prior
-        Gaussian statistics (zero mean, unit variance and higher moments).
-
-        Parameters
-        ----------
-        eps_pred : Tensor of shape (batch_size, dim)
-            Predicted noise residuals.
-        eps_true : Tensor of shape (batch_size, dim)
-            True noise residuals drawn from a unit Gaussian.
-        reduction : {'mean', 'sum', 'none'}, optional
-            Aggregation mode for the isotropy loss.  ``'none'`` returns the
-            per-sample penalties (ISO only).  Default is ``'mean'``.
-
-        Returns
-        -------
-        Tensor
-            When ``reduction`` is ``'none'`` (ISO only) returns a tensor with
-            one entry per batch element.  Otherwise returns a scalar tensor
-            equal to ``reg_strength`` multiplied by the requested reduction of
-            the regularisation loss.
-        """
-        if reduction not in ('mean', 'sum', 'none'):
-            raise ValueError(f"Unknown reduction '{reduction}'.")
-        # dimension of the feature space
-        dim = float(eps_true.shape[-1])
-        # choose loss term
-        if self.reg_type in ('iso', 'iso_frob', 'iso_split', 'iso_logeig', 'iso_bures'):
-            iso_stats = self._isotropy_statistics(eps_pred)
-            squared_norm_per_sample = iso_stats['squared_norm_per_sample']
-            cov = iso_stats['cov']
-            if self.reg_type == 'iso':
-                iso_error = (squared_norm_per_sample - 1.0) ** 2
-                if reduction == 'none':
-                    return self.reg_strength * iso_error
-                if reduction == 'sum':
-                    return self.reg_strength * iso_error.sum()
-                return self.reg_strength * iso_error.mean()
-            if reduction == 'none':
-                raise ValueError(f"Reduction 'none' not supported for reg_type '{self.reg_type}'.")
-            elif self.reg_type == 'iso_frob':
-                eye = torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
-                diff = cov - eye
-                reg_val = (diff * diff).sum()
-            elif self.reg_type == 'iso_split':
-                diag = torch.diagonal(cov)
-                off = cov - torch.diag(diag)
-                reg_val = off.pow(2).sum() + (diag.mean() - 1.0) ** 2
-            else:
-                jitter = 1e-5
-                eye = torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
-                eigvals = torch.linalg.eigvalsh(cov + jitter * eye)
-                if self.reg_type == 'iso_logeig':
-                    reg_val = eigvals.log().pow(2).mean()
-                else:  # iso_bures
-                    reg_val = (eigvals.sqrt() - 1.0).pow(2).mean()
-            return self.reg_strength * reg_val
-        elif self.reg_type == 'mean_l2':
-            mean_pred = eps_pred.mean(dim=0).mean()
-            mean_true = torch.tensor(0.0, device=eps_pred.device)
-            norm_loss = self.loss_fn(mean_pred, mean_true)
-        elif self.reg_type == 'var_l2':
-            var_pred = eps_pred.var(dim=0).mean()
-            var_true = torch.tensor(1.0, device=eps_pred.device)
-            norm_loss = self.loss_fn(var_pred, var_true)
-        elif self.reg_type == 'skew':
-            mu = eps_pred.mean(dim=0)
-            std = eps_pred.std(dim=0) + 1e-8
-            skew_pred = ((eps_pred - mu) ** 3).mean(dim=0) / (std ** 3)
-            skew_true = torch.zeros_like(skew_pred)
-            norm_loss = self.loss_fn(skew_pred, skew_true)
-        elif self.reg_type == 'kurt':
-            mu = eps_pred.mean(dim=0)
-            std = eps_pred.std(dim=0) + 1e-8
-            kurt_pred = ((eps_pred - mu) ** 4).mean(dim=0) / (std ** 4) - 3.0
-            kurt_true = torch.zeros_like(kurt_pred)
-            norm_loss = self.loss_fn(kurt_pred, kurt_true)
-        elif self.reg_type == 'var_mi':
-            mean_pred_samples = eps_pred.mean(dim=1)
-            mean_true_samples = eps_true.mean(dim=1)
-            var_pred = mean_pred_samples.var()
-            var_true = mean_true_samples.var()
-            norm_loss = self.loss_fn(var_pred, var_true)
-        elif self.reg_type == 'kl':
-            # KL divergence between the predicted noise distribution and N(0,I)
-            d = eps_true.shape[-1]
-            mu_p = eps_pred.mean(dim=0)
-            cov_p = torch.cov(eps_pred.t()) + 1e-6 * torch.eye(d, device=eps_pred.device)
-            mu_t = torch.zeros(d, device=eps_pred.device)
-            cov_t = torch.eye(d, device=eps_pred.device)
-            inv_cov_t = cov_t  # identity
-            trace_term = torch.trace(inv_cov_t @ cov_p)
-            quad_term = (mu_t - mu_p).unsqueeze(0) @ inv_cov_t @ (mu_t - mu_p).unsqueeze(1)
-            logdet_term = torch.log(torch.det(cov_t) / torch.det(cov_p) + 1e-8)
-            norm_loss = 0.5 * (trace_term + quad_term.squeeze() - d + logdet_term)
-        elif self.reg_type in ('mmd_linear', 'mmd_rbf'):
-            kernel = self.reg_type.split('_')[1]
-            m, n = eps_pred.shape[0], eps_true.shape[0]
-            if kernel == 'linear':
-                Kxx = eps_pred @ eps_pred.t()
-                Kyy = eps_true @ eps_true.t()
-                Kxy = eps_pred @ eps_true.t()
-            else:
-                gamma = 1.0 / eps_true.shape[-1]
-                xx = (eps_pred ** 2).sum(dim=1).unsqueeze(1)
-                yy = (eps_true ** 2).sum(dim=1).unsqueeze(1)
-                Kxx = torch.exp(-gamma * (xx + xx.t() - 2 * (eps_pred @ eps_pred.t())))
-                Kyy = torch.exp(-gamma * (yy + yy.t() - 2 * (eps_true @ eps_true.t())))
-                Kxy = torch.exp(-gamma * (xx + yy.t() - 2 * (eps_pred @ eps_true.t())))
-            norm_loss = Kxx.sum() / (m * m) + Kyy.sum() / (n * n) - 2.0 * Kxy.sum() / (m * n)
-        else:
-            raise ValueError(f"Unknown reg_type '{self.reg_type}'.")
-        return self.reg_strength * norm_loss
-
-    def _isotropy_statistics(self, eps: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Return reusable statistics for isotropy-based regularisers."""
-        batch_size, dim = eps.shape
-        mean = eps.mean(dim=0, keepdim=True)
-        centered = eps - mean
-        cov = centered.transpose(0, 1) @ centered / float(batch_size)
-        # ensure symmetry for numerical stability
-        cov = 0.5 * (cov + cov.transpose(0, 1))
-        squared_norm_per_sample = eps.pow(2).sum(dim=1) / float(dim)
-        return {
-            'cov': cov,
-            'squared_norm_per_sample': squared_norm_per_sample,
-        }
 
     def sample(self, num_samples: int, device: Optional[torch.device | str] = None,
                use_ema: bool = False, progress: bool = False,

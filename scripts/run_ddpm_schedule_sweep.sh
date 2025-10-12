@@ -34,7 +34,7 @@ for DATASET in "${DATASETS[@]}"; do
   for S in "${SCHEDULES[@]}"; do
     # Baseline DDPM (no regularisation), constant weighting
     echo "  Schedule: ${S} | Model: DDPM (reg=0.0)"
-    python train.py \
+    python main.py --method ddpm \
       --dataset "${DATASET}" \
       --schedule "${S}" \
       --weighting constant \
@@ -46,7 +46,7 @@ for DATASET in "${DATASETS[@]}"; do
 
     # ISO-regularised (reg=0.3), constant weighting
     echo "  Schedule: ${S} | Model: ISO (reg=0.3)"
-    python train.py \
+    python main.py --method ddpm \
       --dataset "${DATASET}" \
       --schedule "${S}" \
       --weighting constant \

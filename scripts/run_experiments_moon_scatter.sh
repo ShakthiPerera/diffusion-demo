@@ -14,7 +14,7 @@ set -e
 export CUBLAS_WORKSPACE_CONFIG=${CUBLAS_WORKSPACE_CONFIG:-:16:8}
 
 # Dataset name for this script
-DATASET="central_banana"
+DATASET="moon_scatter"
 
 # Comma-separated list of regularisation strengths to evaluate
 REG_VALUES="0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9"
@@ -36,7 +36,7 @@ for reg_type in "${REG_TYPES[@]}"; do
     echo "\nStarting repeat ${run} with random_state=${seed} and run_suffix=${run_suffix}"  
     # Pass --enable_metrics only for the first run to collect detailed norms/iso metrics.
     if [ "$run" -eq 1 ]; then
-      python train.py \
+      python main.py --method ddpm \
         --dataset "${DATASET}" \
         --reg_type "${reg_type}" \
         --reg_values "${REG_VALUES}" \
@@ -46,7 +46,7 @@ for reg_type in "${REG_TYPES[@]}"; do
         --save_intermediate \
         "$@"
     else
-      python train.py \
+      python main.py --method ddpm \
         --dataset "${DATASET}" \
         --reg_type "${reg_type}" \
         --reg_values "${REG_VALUES}" \

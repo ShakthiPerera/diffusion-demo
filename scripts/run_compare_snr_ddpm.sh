@@ -15,31 +15,33 @@ set -euo pipefail
 # All supported datasets
 DATASETS=(
   swiss_roll
-  central_banana
-  moon_circles
-  moon_scatter
+  # central_banana
+  # moon_circles
+  # moon_scatter
 )
 
 # Single seed for a single run per dataset
 SEED=${SEED:-0}
 
-echo "Comparing SNR-DDPM vs ISO (reg=0.3 with constant) across datasets"
+echo "Comparing SNR-DDPM vs ISO (reg=0.01 with SNR) across datasets"
 
 for DATASET in "${DATASETS[@]}"; do
   echo "\nDataset: ${DATASET}"
 
-  # 2) ISO with reg=0.3 and SNR weighting
-  echo "  Running ISO (reg=0.3, weighting=constant)"
-  python train.py \
+  # 1) SNR-DDPM baseline: no regularisation (reg_strength=0.0), constant weighting
+  echo "  Running SNR-DDPM baseline (reg=0.0, weighting=snr)"
+  python main.py --method snr \
     --dataset "${DATASET}" \
     --weighting snr \
     --reg_type iso \
-    --reg_strength 0.3 \
-    --run_suffix snr_iso_reg0.3 \
+    --reg_strength 0.0 \
+    --run_suffix snr_ddpm \
     --random_state "${SEED}" \
-    --gpu_id 4 \
+    --gpu_id 5 \
     "$@"
+
 done
 
 echo "All comparisons completed."
 
+q

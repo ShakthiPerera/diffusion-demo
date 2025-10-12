@@ -57,8 +57,8 @@ import matplotlib.pyplot as plt
 
 import torch
 
-from schedules import make_beta_schedule
-from metrics import compute_prdc
+from ..schedules.schedules import make_beta_schedule
+from ..metrics.metrics import compute_prdc
 
 
 METRICS = ["precision", "recall", "density", "coverage"]

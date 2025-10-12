@@ -34,7 +34,7 @@ for DATASET in "${SELECTED_DATASETS[@]}"; do
   echo ""
   echo "Dataset: ${DATASET}"
   echo "  -> Baseline DDPM (reg_type=iso, reg_strength=0.0)"
-  python train.py \
+  python main.py --method ddpm \
     --dataset "${DATASET}" \
     --weighting constant \
     --reg_strength 0.0 \
@@ -47,7 +47,7 @@ for DATASET in "${SELECTED_DATASETS[@]}"; do
   echo "  -> Isotropy sweep (reg_strength=${REG_STRENGTH})"
   for REG_TYPE in "${ISO_REG_TYPES[@]}"; do
     echo "  -> Training with reg_type=${REG_TYPE}"
-    python train.py \
+    python main.py --method ddpm \
       --dataset "${DATASET}" \
       --weighting constant \
       --reg_strength "${REG_STRENGTH}" \

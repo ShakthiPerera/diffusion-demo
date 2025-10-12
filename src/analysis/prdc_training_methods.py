@@ -199,15 +199,50 @@ def mean_metrics(metric_list: List[Dict[str, float]]) -> Dict[str, float]:
     return {k: float(np.mean(vals)) for k, vals in data.items() if vals}
 
 
-METHOD_DIRECTORY_TEMPLATES = {
-    "snr": (
-        Path("iso_snr_ddpm"),
-        lambda reg_iso: Path(f"iso_snr_iso_reg{reg_iso}"),
-    ),
-    "constant": (
-        Path("iso_constant_ddpm"),
-        lambda reg_iso: Path(f"iso_constant_iso_reg{reg_iso}"),
-    ),
+def format_reg_value(reg_value: float) -> str:
+    """Format a regularisation value consistently with on-disk directory names."""
+    text = f"{reg_value:.10g}"
+    if "e" in text or "E" in text:
+        text = f"{reg_value:.10f}".rstrip("0").rstrip(".")
+    if "." not in text:
+        text = f"{text}.0"
+    return text
+
+
+def iter_existing_dirs(dataset_dir: Path, rel_paths: Iterable[Path]) -> Optional[Path]:
+    """Return the first directory under dataset_dir that exists from rel_paths."""
+    for rel in rel_paths:
+        candidate = dataset_dir / rel
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def constant_ddpm_dirs(reg: float) -> List[Path]:
+    reg_str = format_reg_value(reg)
+    return [
+        Path("iso_constant_ddpm") / f"reg_{reg_str}",
+        Path("iso_iso_compare_baseline") / f"reg_{reg_str}",
+    ]
+
+
+def constant_iso_dirs(reg: float) -> List[Path]:
+    reg_str = format_reg_value(reg)
+    return [
+        Path(f"iso_constant_iso_reg{reg_str}") / f"reg_{reg_str}",
+        Path("iso_iso_compare") / f"reg_{reg_str}",
+    ]
+
+
+METHOD_DIRECTORY_PATTERNS = {
+    "snr": {
+        "ddpm": lambda reg: [Path("iso_snr_ddpm") / f"reg_{format_reg_value(reg)}"],
+        "iso": lambda reg: [Path(f"iso_snr_iso_reg{format_reg_value(reg)}") / f"reg_{format_reg_value(reg)}"],
+    },
+    "constant": {
+        "ddpm": constant_ddpm_dirs,
+        "iso": constant_iso_dirs,
+    },
 }
 
 
@@ -242,11 +277,11 @@ def compute_method_summary(
             if ddpm_metrics and iso_metrics:
                 ddpm_metrics_all.append(ddpm_metrics)
                 iso_metrics_all.append(iso_metrics)
-    elif method in METHOD_DIRECTORY_TEMPLATES:
-        ddpm_root, iso_root_fn = METHOD_DIRECTORY_TEMPLATES[method]
-        ddpm_dir = dataset_dir / ddpm_root / f"reg_{reg_ddpm}"
-        iso_dir = dataset_dir / iso_root_fn(reg_iso) / f"reg_{reg_iso}"
-        if ddpm_dir.exists() and iso_dir.exists():
+    elif method in METHOD_DIRECTORY_PATTERNS:
+        patterns = METHOD_DIRECTORY_PATTERNS[method]
+        ddpm_dir = iter_existing_dirs(dataset_dir, patterns["ddpm"](reg_ddpm))
+        iso_dir = iter_existing_dirs(dataset_dir, patterns["iso"](reg_iso))
+        if ddpm_dir and iso_dir:
             ddpm_metrics = load_metrics_with_fallback(
                 ddpm_dir, dataset, reg_ddpm, checkpoint_mode="last",
                 select_by=iso_select_by, min_step=min_step, max_step=max_step

@@ -30,7 +30,7 @@ samples ``fake_features`` approximates a set of ground‑truth samples
 Example
 -------
 
->>> from metrics import compute_prdc
+>>> from src.metrics.metrics import compute_prdc
 >>> import numpy as np
 >>> real = np.random.randn(1000, 2).astype(np.float32)
 >>> fake = np.random.randn(1000, 2).astype(np.float32)

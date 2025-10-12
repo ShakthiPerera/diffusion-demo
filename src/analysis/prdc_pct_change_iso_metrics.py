@@ -5,14 +5,16 @@ Workflow requested:
   1. Scan every PRDC checkpoint CSV (``checkpoint_prdc_metrics_*.csv``) for the
      baseline objective and each ISO metric variant (trace, bures, frob,
      logeig, split).
-  2. For the baseline directory, use the final training step (last row) as the
-     reference PRDC metrics.
+  2. For the baseline directory, choose the checkpoint row that maximises the
+     PRDC density within the optional step window (preferring regs closest to
+     the requested baseline reg, default 0.0).
   3. For the "trace" ISO variant, within an optional inclusive step range,
-     retain the checkpoint row where BOTH precision and density exceed the
-     baseline values. If multiple rows satisfy the condition, select the row
-     with highest density, breaking ties by precision then step.
-  4. For other ISO variants (bures, frob, logeig, split), simply take the last
-     checkpoint row (after optional step filtering).
+     retain a checkpoint row whose precision and density both exceed baseline.
+     If multiple rows satisfy the condition, keep the one with highest density,
+     breaking ties by precision then step.
+  4. For other ISO variants (bures, frob, logeig, split), pick the checkpoint
+     row with the highest PRDC density (ties resolved by precision then step)
+     inside the same step window.
   5. Plot the percentage change (precision, recall, density, coverage) versus
      the baseline, keeping the x-axis order: trace, bures, frob, logeig, split.
 
@@ -32,7 +34,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -100,8 +102,10 @@ def choose_baseline_entry(
     baseline_dir: Path,
     dataset: str,
     preferred_reg: Optional[float],
+    min_step: Optional[int],
+    max_step: Optional[int],
 ) -> Optional[Dict[str, float]]:
-    entries: List[Tuple[float, pd.Series]] = []
+    entries: List[Dict[str, float]] = []
     for reg_dir in sorted(baseline_dir.iterdir()):
         if not reg_dir.is_dir():
             continue
@@ -113,23 +117,28 @@ def choose_baseline_entry(
         df = read_prdc_checkpoint(csv_path)
         if df.empty:
             continue
-        row = df.iloc[-1]  # baseline requirement: use last step
-        entries.append((reg_val, row))
+        if (min_step is not None) or (max_step is not None):
+            lo = min_step if min_step is not None else int(df["step"].min())
+            hi = max_step if max_step is not None else int(df["step"].max())
+            df = df[(df["step"] >= lo) & (df["step"] <= hi)]
+            if df.empty:
+                continue
+        idx = df["density"].idxmax()
+        row = df.loc[idx]
+        entry = {
+            "iso_metric": "baseline",
+            "reg": float(reg_val),
+            "step": int(row["step"]),
+            **{metric: float(row[metric]) for metric in PRDC_METRICS},
+        }
+        entries.append(entry)
     if not entries:
         return None
     if preferred_reg is not None:
-        reg_val, row = min(entries, key=lambda item: abs(item[0] - preferred_reg))
+        chosen = min(entries, key=lambda e: abs(e["reg"] - preferred_reg))
     else:
-        # fallback to reg=0.0 if present, else smallest reg
-        candidates = sorted(entries, key=lambda item: (abs(item[0]), item[0]))
-        reg_val, row = candidates[0]
-    baseline = {
-        "iso_metric": "baseline",
-        "reg": float(reg_val),
-        "step": int(row["step"]),
-    }
-    baseline.update({metric: float(row[metric]) for metric in PRDC_METRICS})
-    return baseline
+        chosen = min(entries, key=lambda e: (abs(e["reg"]), e["reg"]))
+    return chosen.copy()
 
 
 def select_variant_entry_strict(
@@ -170,12 +179,19 @@ def select_variant_entry_strict(
             "step": int(row["step"]),
         }
         entry.update({metric: float(row[metric]) for metric in PRDC_METRICS})
-        if best_entry is None or entry["density"] > best_entry["density"]:
+        if (
+            best_entry is None
+            or entry["density"] > best_entry["density"]
+            or (
+                entry["density"] == best_entry["density"]
+                and (entry["precision"], entry["step"]) > (best_entry["precision"], best_entry["step"])
+            )
+        ):
             best_entry = entry
     return best_entry
 
 
-def select_variant_entry_last_step(
+def select_variant_entry_best_density(
     iso_name: str,
     variant_dir: Path,
     dataset: str,
@@ -200,14 +216,22 @@ def select_variant_entry_last_step(
             df = df[(df["step"] >= lo) & (df["step"] <= hi)]
             if df.empty:
                 continue
-        row = df.iloc[-1]
+        idx = df["density"].idxmax()
+        row = df.loc[idx]
         entry = {
             "iso_metric": iso_name,
             "reg": float(reg_val),
             "step": int(row["step"]),
         }
         entry.update({metric: float(row[metric]) for metric in PRDC_METRICS})
-        if (best_entry is None) or (entry["step"] > best_entry["step"]):
+        if (
+            best_entry is None
+            or entry["density"] > best_entry["density"]
+            or (
+                entry["density"] == best_entry["density"]
+                and (entry["precision"], entry["step"]) > (best_entry["precision"], best_entry["step"])
+            )
+        ):
             best_entry = entry
     return best_entry
 
@@ -293,7 +317,13 @@ def process_dataset(
         print(f"[WARN] {dataset}: baseline directory '{baseline_dir_name}' missing.")
         return
 
-    baseline_entry = choose_baseline_entry(baseline_dir, dataset, preferred_reg=baseline_reg_preference)
+    baseline_entry = choose_baseline_entry(
+        baseline_dir,
+        dataset,
+        preferred_reg=baseline_reg_preference,
+        min_step=min_step,
+        max_step=max_step,
+    )
     if not baseline_entry:
         print(f"[WARN] {dataset}: could not determine baseline PRDC metrics.")
         return
@@ -340,7 +370,7 @@ def process_dataset(
                 max_step=max_step,
             )
         else:
-            entry = select_variant_entry_last_step(
+            entry = select_variant_entry_best_density(
                 iso_name=iso_name,
                 variant_dir=variant_dir,
                 dataset=dataset,
@@ -348,7 +378,10 @@ def process_dataset(
                 max_step=max_step,
             )
         if not entry:
-            selection_msgs.append(f"{iso_name}: no checkpoint exceeded baseline precision & density.")
+            if iso_name == "trace":
+                selection_msgs.append(f"{iso_name}: no checkpoint exceeded baseline precision & density.")
+            else:
+                selection_msgs.append(f"{iso_name}: no checkpoints available after filtering.")
             continue
         row = {
             "iso_metric": iso_name,

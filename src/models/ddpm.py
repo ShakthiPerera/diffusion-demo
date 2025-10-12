@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 from ..schedules.schedules import make_beta_schedule
-from ..training.losses import diffusion_loss, build_reg_loss_fn
+from ..training.losses import diffusion_loss, build_reg_loss_fn, compute_snr, snr_weights
 
 
 class SimpleMLP(nn.Module):
@@ -184,21 +184,41 @@ class GenericDDPM(nn.Module):
                  device: Optional[torch.device | str] = None,
                  reg_strength: float = 0.0,
                  reg_type: str = 'iso',
-                 snr_gamma: float = 5.0) -> None:
+                 snr_gamma: float = 5.0,
+                 learn_sigma: bool = False,
+                 vlb_weight: float = 1e-3,
+                 variance_type: str = 'learned_range') -> None:
         super().__init__()
         self.eps_model = eps_model
         self.device = torch.device(device) if device is not None else torch.device('cpu')
+        self.learn_sigma = bool(learn_sigma)
+        self.vlb_weight = float(vlb_weight)
+        self.variance_type = variance_type
+        if self.variance_type not in {'fixed_small', 'learned', 'learned_range'}:
+            raise ValueError(f"Unknown variance_type '{variance_type}'.")
         # register betas and derived quantities as buffers (non‑trainable)
         betas = betas.to(torch.float32)
         self.register_buffer('betas', betas)
+        self.register_buffer('log_betas', torch.log(torch.clamp(betas, min=1e-20)))
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas_cumprod_prev = torch.cat([torch.ones(1, dtype=alphas.dtype, device=alphas.device),
+                                         alphas_cumprod[:-1]])
         # store useful constants
         self.register_buffer('alphas', alphas)
         self.register_buffer('alphas_cumprod', alphas_cumprod)
+        self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - alphas_cumprod))
         self.register_buffer('sqrt_recip_alphas', torch.sqrt(1.0 / alphas))
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        self.register_buffer('posterior_variance', posterior_variance)
+        self.register_buffer('posterior_log_variance_clipped',
+                             torch.log(torch.clamp(posterior_variance, min=1e-20)))
+        self.register_buffer('posterior_mean_coef1',
+                             betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod))
+        self.register_buffer('posterior_mean_coef2',
+                             (1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod))
         # choose loss function
         if criterion == 'mse':
             self.loss_fn = nn.MSELoss()
@@ -254,6 +274,97 @@ class GenericDDPM(nn.Module):
         x_t = sqrt_alpha_bar * x0 + sqrt_one_minus_alpha_bar * noise
         return x_t, noise
 
+    def _predict_eps_and_logvar(self, x_t: torch.Tensor, t: torch.Tensor,
+                                model: Optional[nn.Module] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Predict noise and log variance for a batch of noisy samples."""
+        model = model if model is not None else self.eps_model
+        model_out = model(x_t, t)
+        data_dim = x_t.shape[1]
+        if self.learn_sigma:
+            if model_out.shape[1] != data_dim * 2:
+                raise ValueError('When learn_sigma is enabled the model output must have 2 * data_dim features.')
+            eps_pred, var_out = torch.split(model_out, data_dim, dim=1)
+            if self.variance_type == 'learned':
+                log_var = var_out
+            elif self.variance_type == 'learned_range':
+                min_log = self.posterior_log_variance_clipped[t].unsqueeze(1)
+                max_log = self.log_betas[t].unsqueeze(1)
+                frac = torch.sigmoid(var_out)
+                log_var = frac * max_log + (1.0 - frac) * min_log
+            else:  # fixed_small fallback
+                log_var = self.posterior_log_variance_clipped[t].unsqueeze(1)
+        else:
+            eps_pred = model_out
+            log_var = self.posterior_log_variance_clipped[t].unsqueeze(1)
+        return eps_pred, log_var
+
+    def _predict_x0_from_eps(self, x_t: torch.Tensor, t: torch.Tensor,
+                             eps_pred: torch.Tensor) -> torch.Tensor:
+        """Reconstruct x0 from a predicted noise residual."""
+        sqrt_alpha_bar = self.sqrt_alphas_cumprod[t].unsqueeze(1)
+        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t].unsqueeze(1)
+        x0_pred = (x_t - sqrt_one_minus_alpha_bar * eps_pred) / torch.clamp(sqrt_alpha_bar, min=1e-8)
+        if self.learn_sigma:
+            x0_pred = x0_pred.clamp(-1.0, 1.0)
+        return x0_pred
+
+    def _compute_posterior_mean(self, x_t: torch.Tensor, t: torch.Tensor,
+                                x0_pred: torch.Tensor) -> torch.Tensor:
+        """Compute the posterior mean using predicted x0."""
+        coef1 = self.posterior_mean_coef1[t].unsqueeze(1)
+        coef2 = self.posterior_mean_coef2[t].unsqueeze(1)
+        return coef1 * x0_pred + coef2 * x_t
+
+    def _gaussian_kl(self, true_mean: torch.Tensor, true_var: torch.Tensor,
+                     model_mean: torch.Tensor, model_log_var: torch.Tensor) -> torch.Tensor:
+        """KL divergence between two diagonal Gaussians."""
+        true_var = torch.clamp(true_var, min=1e-20)
+        model_var = torch.exp(model_log_var)
+        return 0.5 * (
+            model_log_var - torch.log(true_var)
+            + (true_var + (true_mean - model_mean) ** 2) / model_var
+            - 1.0
+        ).sum(dim=1)
+
+    def _compute_vlb_terms(self, x0: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor,
+                           model_mean: torch.Tensor, model_log_var: torch.Tensor) -> torch.Tensor:
+        """Return per-sample KL terms for the variational bound."""
+        true_mean = self._compute_posterior_mean(x_t, t, x0)
+        true_var = self.posterior_variance[t].unsqueeze(1)
+        return self._gaussian_kl(true_mean, true_var, model_mean, model_log_var)
+
+    def _compute_simple_loss(self, pred_eps: torch.Tensor, noise: torch.Tensor, t: torch.Tensor,
+                             weighting: str) -> torch.Tensor:
+        """Return the diffusion objective (simple loss + optional regularisation)."""
+        mse_scalar = ((pred_eps - noise) ** 2).mean(dim=1)
+        snr = compute_snr(self.alphas_cumprod[t])
+        weights = snr_weights(snr, self.snr_gamma)
+        weighted_mse = (mse_scalar * weights).mean()
+        simple_mse = mse_scalar.mean()
+        if self.reg_strength > 0.0:
+            if self.reg_type == 'iso':
+                iso_loss = self.reg_loss_fn(pred_eps, noise, reduction='none')
+                iso_weights = weights if weighting == 'snr' else torch.ones_like(weights)
+                reg_loss = (iso_loss * iso_weights).mean()
+            else:
+                reg_loss = self.reg_loss_fn(pred_eps, noise, reduction='mean')
+        else:
+            reg_loss = torch.tensor(0.0, device=pred_eps.device, dtype=pred_eps.dtype)
+        primary = weighted_mse if weighting == 'snr' else simple_mse
+        return primary + reg_loss
+
+    def _train_step_learn_sigma(self, x0: torch.Tensor, x_t: torch.Tensor,
+                                noise: torch.Tensor, t: torch.Tensor,
+                                weighting: str) -> torch.Tensor:
+        """Compute the hybrid loss used in Improved DDPM training."""
+        eps_pred, log_var = self._predict_eps_and_logvar(x_t, t)
+        simple_loss = self._compute_simple_loss(eps_pred, noise, t, weighting)
+        x0_pred = self._predict_x0_from_eps(x_t, t, eps_pred)
+        model_mean = self._compute_posterior_mean(x_t, t, x0_pred)
+        vlb_terms = self._compute_vlb_terms(x0, x_t, t, model_mean, log_var)
+        vlb_loss = vlb_terms.mean()
+        return simple_loss + (self.vlb_weight * vlb_loss)
+
     def train_step(self, x0: torch.Tensor, weighting: str = 'constant') -> float:
         """Perform a single optimisation step on a batch of data.
 
@@ -280,17 +391,20 @@ class GenericDDPM(nn.Module):
         device = x0.device
         t = torch.randint(0, self.betas.size(0), (batch_size,), device=device)
         x_t, noise = self.diffuse(x0, t)
-        pred_noise = self.eps_model(x_t, t)
-        alpha_bar = self.alphas_cumprod[t]
-        total_loss, _ = diffusion_loss(
-            pred_noise=pred_noise,
-            true_noise=noise,
-            alphas_cumprod_t=alpha_bar,
-            weighting=weighting,
-            snr_gamma=self.snr_gamma,
-            reg_type=self.reg_type,
-            reg_loss_fn=self.reg_loss_fn,
-        )
+        if self.learn_sigma:
+            total_loss = self._train_step_learn_sigma(x0, x_t, noise, t, weighting)
+        else:
+            pred_noise = self.eps_model(x_t, t)
+            alpha_bar = self.alphas_cumprod[t]
+            total_loss, _ = diffusion_loss(
+                pred_noise=pred_noise,
+                true_noise=noise,
+                alphas_cumprod_t=alpha_bar,
+                weighting=weighting,
+                snr_gamma=self.snr_gamma,
+                reg_type=self.reg_type,
+                reg_loss_fn=self.reg_loss_fn,
+            )
         # optimisation step
         self.optimizer.zero_grad()
         total_loss.backward()
@@ -330,17 +444,25 @@ class GenericDDPM(nn.Module):
         t = torch.randint(0, self.betas.size(0), (batch_size,), device=device)
         with torch.no_grad():
             x_t, noise = self.diffuse(x0, t)
-            pred_noise = self.eps_model(x_t, t)
-            alpha_bar = self.alphas_cumprod[t]
-            total_loss, _ = diffusion_loss(
-                pred_noise=pred_noise,
-                true_noise=noise,
-                alphas_cumprod_t=alpha_bar,
-                weighting=weighting,
-                snr_gamma=self.snr_gamma,
-                reg_type=self.reg_type,
-                reg_loss_fn=self.reg_loss_fn,
-            )
+            if self.learn_sigma:
+                eps_pred, log_var = self._predict_eps_and_logvar(x_t, t)
+                simple_loss = self._compute_simple_loss(eps_pred, noise, t, weighting)
+                x0_pred = self._predict_x0_from_eps(x_t, t, eps_pred)
+                model_mean = self._compute_posterior_mean(x_t, t, x0_pred)
+                vlb_terms = self._compute_vlb_terms(x0, x_t, t, model_mean, log_var)
+                total_loss = simple_loss + (self.vlb_weight * vlb_terms.mean())
+            else:
+                pred_noise = self.eps_model(x_t, t)
+                alpha_bar = self.alphas_cumprod[t]
+                total_loss, _ = diffusion_loss(
+                    pred_noise=pred_noise,
+                    true_noise=noise,
+                    alphas_cumprod_t=alpha_bar,
+                    weighting=weighting,
+                    snr_gamma=self.snr_gamma,
+                    reg_type=self.reg_type,
+                    reg_loss_fn=self.reg_loss_fn,
+                )
         return float(total_loss.detach().item())
 
     def evaluate(self, dataloader, weighting: str = 'constant') -> float:
@@ -492,6 +614,10 @@ class GenericDDPM(nn.Module):
             except Exception:
                 # As a last resort default to single dimensional output
                 data_dim = 1
+        if self.learn_sigma:
+            if data_dim % 2 != 0:
+                raise ValueError('Model output dimension must be even when learn_sigma=True.')
+            data_dim = data_dim // 2
         # ------------------------------------------------------------------
         # Initialise the starting noise ``x_T`` with Gaussian noise of shape
         # (num_samples, data_dim)
@@ -502,19 +628,28 @@ class GenericDDPM(nn.Module):
             steps_list = []
         for t in reversed(range(T)):
             t_batch = torch.full((num_samples,), t, device=device, dtype=torch.long)
-            beta_t = self.betas[t]
-            sqrt_recip_alpha_t = self.sqrt_recip_alphas[t]
-            sqrt_one_minus_alpha_bar_t = self.sqrt_one_minus_alphas_cumprod[t]
-            # predict noise
-            eps_theta = eps_model(x_t, t_batch)
-            # compute the mean of the posterior q(x_{t-1} | x_t, x0)
-            model_mean = sqrt_recip_alpha_t * (x_t - beta_t / sqrt_one_minus_alpha_bar_t * eps_theta)
-            if t > 0:
-                noise = torch.randn_like(x_t)
-                sigma_t = torch.sqrt(beta_t)
-                x_t = model_mean + sigma_t * noise
+            if self.learn_sigma:
+                eps_theta, log_var = self._predict_eps_and_logvar(x_t, t_batch, model=eps_model)
+                x0_pred = self._predict_x0_from_eps(x_t, t_batch, eps_theta)
+                model_mean = self._compute_posterior_mean(x_t, t_batch, x0_pred)
+                if t > 0:
+                    noise = torch.randn_like(x_t)
+                    sigma_t = torch.exp(0.5 * log_var)
+                    x_t = model_mean + sigma_t * noise
+                else:
+                    x_t = model_mean
             else:
-                x_t = model_mean
+                beta_t = self.betas[t]
+                sqrt_recip_alpha_t = self.sqrt_recip_alphas[t]
+                sqrt_one_minus_alpha_bar_t = self.sqrt_one_minus_alphas_cumprod[t]
+                eps_theta = eps_model(x_t, t_batch)
+                model_mean = sqrt_recip_alpha_t * (x_t - beta_t / sqrt_one_minus_alpha_bar_t * eps_theta)
+                if t > 0:
+                    noise = torch.randn_like(x_t)
+                    sigma_t = torch.sqrt(beta_t)
+                    x_t = model_mean + sigma_t * noise
+                else:
+                    x_t = model_mean
             # record the sample for this timestep
             if return_all_steps:
                 steps_list.append(x_t.detach().clone())

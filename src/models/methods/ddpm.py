@@ -17,6 +17,9 @@ def build_model(
     reg_strength: float,
 ) -> GenericDDPM:
     """Return the standard GenericDDPM instance."""
+    learn_sigma = bool(getattr(args, "learn_sigma", False))
+    vlb_weight = float(getattr(args, "vlb_weight", 1e-3))
+    variance_type = getattr(args, "variance_type", "learned_range")
     return GenericDDPM(
         eps_model=eps_model,
         betas=betas,
@@ -27,4 +30,7 @@ def build_model(
         reg_strength=reg_strength,
         reg_type=args.reg_type,
         snr_gamma=args.snr_gamma,
+        learn_sigma=learn_sigma,
+        vlb_weight=vlb_weight,
+        variance_type=variance_type,
     )

@@ -16,7 +16,6 @@ _MODEL_MODULES = {
     "ddpm": ".ddpm",
     "snr": ".snr",
     "improved": ".improved",
-    "score": ".score",
 }
 
 

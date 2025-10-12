@@ -75,6 +75,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--weighting', type=str, default='constant', choices=['constant', 'snr'],
                         help=('Type of loss weighting.  "snr" applies SNR‑based weighting as in the '
                               'Improved DDPM paper.  The default "constant" uses no weighting.'))
+    parser.add_argument('--learn_sigma', action='store_true',
+                        help='Enable learned variance prediction (Improved DDPM).')
+    parser.add_argument('--no_learn_sigma', dest='learn_sigma', action='store_false',
+                        help='Disable learned variance prediction (overrides method defaults).')
+    parser.set_defaults(learn_sigma=False)
+    parser.add_argument('--vlb_weight', type=float, default=1e-3,
+                        help='Weight applied to the variational bound term when learning sigma.')
+    parser.add_argument('--variance_type', type=str, default='learned_range',
+                        choices=['fixed_small', 'learned', 'learned_range'],
+                        help='Variance parameterisation to use when sigma is learned.')
     parser.add_argument('--ema_decay', type=float, default=None,
                         help='Decay rate for exponential moving average of model parameters.  Disabled if None.')
     parser.add_argument('--hidden_dim', type=int, default=128,
@@ -205,6 +215,7 @@ def main(args: argparse.Namespace, model_builder: Optional[ModelBuilder] = None)
         X_val = X[val_indices]
     # convert to tensors
     X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+    data_dim = X_train_tensor.shape[1]
     # create a generator for deterministic data loading
     gen = torch.Generator()
     gen.manual_seed(seed)
@@ -304,7 +315,8 @@ def main(args: argparse.Namespace, model_builder: Optional[ModelBuilder] = None)
         # build diffusion model
         betas = make_beta_schedule(args.num_diffusion_steps, mode=args.schedule)
         # instantiate the conditional dense model used in the original codebase
-        dims = [2] + [args.hidden_dim] * args.num_layers + [2]
+        output_dim = data_dim * (2 if getattr(args, 'learn_sigma', False) else 1)
+        dims = [data_dim] + [args.hidden_dim] * args.num_layers + [output_dim]
         eps_model = ConditionalDenseModel(dims, activation='relu', embed_dim=args.embed_dim)
         device = torch.device(f'cuda:{args.gpu_id}' if torch.cuda.is_available() else 'cpu')
         model = builder(args, device, betas, eps_model, reg)

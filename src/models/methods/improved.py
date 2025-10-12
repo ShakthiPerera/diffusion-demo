@@ -1,11 +1,12 @@
-"""Placeholder model builder for Improved DDPM."""
+"""Model builder for Improved DDPM with learned variances."""
 
 from __future__ import annotations
 
 import argparse
-from typing import NoReturn
 
 import torch
+
+from ..ddpm import GenericDDPM
 
 
 def build_model(
@@ -14,9 +15,22 @@ def build_model(
     betas: torch.Tensor,
     eps_model: torch.nn.Module,
     reg_strength: float,
-) -> NoReturn:
-    """Placeholder until Improved DDPM model is implemented."""
-    raise NotImplementedError(
-        "Improved DDPM model builder is not yet implemented. "
-        "Add the appropriate model construction logic in src/models/methods/improved.py."
+) -> GenericDDPM:
+    """Return a GenericDDPM configured for Improved DDPM training."""
+    learn_sigma = bool(getattr(args, "learn_sigma", True))
+    vlb_weight = float(getattr(args, "vlb_weight", 1e-3))
+    variance_type = getattr(args, "variance_type", "learned_range")
+    return GenericDDPM(
+        eps_model=eps_model,
+        betas=betas,
+        criterion=args.criterion,
+        lr=args.lr,
+        ema_decay=args.ema_decay,
+        device=device,
+        reg_strength=reg_strength,
+        reg_type=args.reg_type,
+        snr_gamma=args.snr_gamma,
+        learn_sigma=learn_sigma,
+        vlb_weight=vlb_weight,
+        variance_type=variance_type,
     )

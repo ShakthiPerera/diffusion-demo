@@ -34,8 +34,8 @@ Available methods can be listed with `python main.py --list-methods`. Current
 options:
 
 - `ddpm`: standard constant-weighting DDPM training.
-- `snr`: Improved DDPM/SNR-weighted training.
-- `improved`, `score`: placeholders ready for future extensions.
+- `snr`: DDPM with min-SNR loss weighting.
+- `improved`: Improved DDPM with learned variance and hybrid loss.
 
 The original training module remains accessible for advanced workflows:
 

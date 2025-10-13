@@ -15,7 +15,7 @@ import torch
 
 
 LossStats = Dict[str, torch.Tensor]
-RegLossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+RegLossFn = Callable[[torch.Tensor, torch.Tensor, Optional[torch.Tensor]], torch.Tensor]
 ISO_REG_TYPES = {"iso", "iso_frob", "iso_split", "iso_logeig", "iso_bures"}
 
 
@@ -50,7 +50,8 @@ def diffusion_loss(
     device = pred_noise.device
     reg_loss = torch.zeros((), device=device)
     if reg_loss_fn is not None:
-        reg_loss = reg_loss_fn(pred_noise, true_noise)
+        reg_weights = weights if weighting == "snr" else None
+        reg_loss = reg_loss_fn(pred_noise, true_noise, reg_weights)
 
     if weighting == "snr":
         total_loss = weighted_mse + reg_loss
@@ -66,13 +67,28 @@ def diffusion_loss(
     return total_loss, stats
 
 
-def _zero_reg_loss(eps_pred: torch.Tensor, _eps_true: torch.Tensor) -> torch.Tensor:
+def _zero_reg_loss(
+    eps_pred: torch.Tensor,
+    _eps_true: torch.Tensor,
+    _weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     return torch.zeros((), device=eps_pred.device, dtype=eps_pred.dtype)
 
 
-def _isotropy_statistics(eps: torch.Tensor) -> Dict[str, torch.Tensor]:
+def _isotropy_statistics(
+    eps: torch.Tensor,
+    weights: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
     batch_size = eps.shape[0]
-    cov = eps.transpose(0, 1) @ eps / float(batch_size)
+    if weights is None:
+        norm = float(batch_size)
+        cov = eps.transpose(0, 1) @ eps / norm
+    else:
+        weights = weights.view(batch_size)
+        weight_sum = torch.clamp(weights.sum(), min=1e-8)
+        norm_weights = weights / weight_sum
+        weighted_eps = eps * norm_weights.unsqueeze(1)
+        cov = eps.transpose(0, 1) @ weighted_eps
     return {
         "cov": cov,
     }
@@ -81,13 +97,19 @@ def _isotropy_statistics(eps: torch.Tensor) -> Dict[str, torch.Tensor]:
 def _iso_family_loss(
     eps_pred: torch.Tensor,
     reg_type: str,
+    weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    stats = _isotropy_statistics(eps_pred)
+    if reg_type == "iso":
+        per_sample_sq = eps_pred.square().mean(dim=1)
+        deviations = (per_sample_sq - 1.0).square()
+        if weights is not None:
+            weights = weights.view(-1)
+            return (deviations * weights).sum()
+        mean_sq = per_sample_sq.mean()
+        return (mean_sq - 1.0).square()
+    stats = _isotropy_statistics(eps_pred, weights=weights)
     cov = stats["cov"]
     eye = torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
-    if reg_type == "iso":
-        mean_sq = eps_pred.flatten().square().mean()
-        return (mean_sq - 1.0).square()
     if reg_type == "iso_frob":
         diff = cov - eye
         return (diff * diff).mean()
@@ -118,8 +140,9 @@ def build_reg_loss_fn(
         def _iso_reg_loss(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
+            weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
-            base = _iso_family_loss(eps_pred, reg_type=reg_type)
+            base = _iso_family_loss(eps_pred, reg_type=reg_type, weights=weights)
             return reg_strength * base
         return _iso_reg_loss
 
@@ -127,6 +150,7 @@ def build_reg_loss_fn(
         def _mean_l2(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             mean_pred = eps_pred.mean(dim=0).mean()
             mean_true = torch.tensor(0.0, device=eps_pred.device, dtype=eps_pred.dtype)
@@ -137,6 +161,7 @@ def build_reg_loss_fn(
         def _var_l2(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             var_pred = eps_pred.var(dim=0).mean()
             var_true = torch.tensor(1.0, device=eps_pred.device, dtype=eps_pred.dtype)
@@ -147,6 +172,7 @@ def build_reg_loss_fn(
         def _skew(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             mu = eps_pred.mean(dim=0)
             std = eps_pred.std(dim=0) + 1e-8
@@ -159,6 +185,7 @@ def build_reg_loss_fn(
         def _kurt(
             eps_pred: torch.Tensor,
             _eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             mu = eps_pred.mean(dim=0)
             std = eps_pred.std(dim=0) + 1e-8
@@ -171,6 +198,7 @@ def build_reg_loss_fn(
         def _var_mi(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             mean_pred_samples = eps_pred.mean(dim=1)
             mean_true_samples = eps_true.mean(dim=1)
@@ -183,6 +211,7 @@ def build_reg_loss_fn(
         def _kl(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             d = eps_true.shape[-1]
             mu_p = eps_pred.mean(dim=0)
@@ -204,6 +233,7 @@ def build_reg_loss_fn(
         def _mmd(
             eps_pred: torch.Tensor,
             eps_true: torch.Tensor,
+            _weights: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             m, n = eps_pred.shape[0], eps_true.shape[0]
             if kernel == "linear":

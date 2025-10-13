@@ -341,7 +341,8 @@ class GenericDDPM(nn.Module):
         weights = snr_weights(snr, self.snr_gamma)
         weighted_mse = (mse_scalar * weights).mean()
         simple_mse = mse_scalar.mean()
-        reg_loss = self.reg_loss_fn(pred_eps, noise)
+        reg_weights = weights if weighting == 'snr' else None
+        reg_loss = self.reg_loss_fn(pred_eps, noise, reg_weights)
         primary = weighted_mse if weighting == 'snr' else simple_mse
         return primary + reg_loss
 

@@ -77,6 +77,9 @@ def train(args: argparse.Namespace) -> None:
     )
     data = dataset.generate()
     dataloader = make_dataloader(data, args.batch_size, args.random_state)
+    run_dir = os.path.join(args.save_dir, args.dataset)
+    os.makedirs(run_dir, exist_ok=True)
+    np.save(os.path.join(run_dir, f"true_{args.dataset}.npy"), data.astype(np.float32))
 
     betas = make_beta_schedule(args.num_diffusion_steps, mode=args.schedule)
     eps_model = TimeConditionedMLP(
@@ -97,6 +100,34 @@ def train(args: argparse.Namespace) -> None:
         snr_gamma=args.snr_gamma,
     ).to(device)
 
+    # write a simple run sheet with model/diffusion settings
+    settings_path = os.path.join(run_dir, "settings.txt")
+    with open(settings_path, "w") as sf:
+        sf.write("Dataset\n")
+        sf.write(f"  name: {args.dataset}\n")
+        sf.write(f"  num_samples: {args.num_samples}\n")
+        sf.write(f"  noise_level: {args.noise_level}\n")
+        sf.write(f"  random_state: {args.random_state}\n\n")
+        sf.write("Diffusion\n")
+        sf.write(f"  num_diffusion_steps: {args.num_diffusion_steps}\n")
+        sf.write(f"  schedule: {args.schedule}\n")
+        sf.write(f"  reg_strength: {args.reg_strength}\n")
+        sf.write(f"  weighting: {args.weighting}\n")
+        sf.write(f"  snr_gamma: {args.snr_gamma}\n")
+        sf.write(f"  ema_decay: {args.ema_decay}\n\n")
+        sf.write("Model\n")
+        sf.write(f"  hidden_dim: {args.hidden_dim}\n")
+        sf.write(f"  num_layers: {args.num_layers}\n")
+        sf.write(f"  embed_dim: {args.embed_dim}\n")
+        sf.write("\nTraining\n")
+        sf.write(f"  train_steps: {args.train_steps}\n")
+        sf.write(f"  batch_size: {args.batch_size}\n")
+        sf.write(f"  lr: {args.lr}\n")
+        sf.write(f"  log_every: {args.log_every}\n")
+        sf.write("\nSampling\n")
+        sf.write(f"  sample_size: {args.sample_size}\n")
+        sf.write(f"  nearest_k: {args.nearest_k}\n")
+
     data_iter = iter(dataloader)
     for step in range(args.train_steps):
         try:
@@ -114,14 +145,10 @@ def train(args: argparse.Namespace) -> None:
     samples_np = samples.cpu().numpy().astype(np.float32)
     metrics = compute_prdc(real_features=data, fake_features=samples_np, nearest_k=args.nearest_k)
 
-    run_dir = os.path.join(args.save_dir, args.dataset)
-    os.makedirs(run_dir, exist_ok=True)
     np.save(os.path.join(run_dir, f"generated_{args.dataset}.npy"), samples_np)
     with open(os.path.join(run_dir, f"prdc_{args.dataset}.txt"), "w") as f:
         for k, v in metrics.items():
             f.write(f"{k}: {v:.6f}\n")
-    torch.save({"model_state_dict": model.state_dict(), "epsilon_model_state_dict": model.eps_model.state_dict()}, os.path.join(run_dir, "model.pt"))
-
     try:
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.scatter(data[:, 0], data[:, 1], s=2, alpha=0.5, label="train")

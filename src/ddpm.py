@@ -47,7 +47,6 @@ class DiffusionModel(nn.Module):
         ema_decay: Optional[float] = None,
         device: Optional[torch.device | str] = None,
         reg_strength: float = 0.0,
-        snr_gamma: float = 5.0,
     ) -> None:
         super().__init__()
         self.eps_model = eps_model
@@ -62,7 +61,6 @@ class DiffusionModel(nn.Module):
         self.register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
         self.register_buffer("sqrt_recip_alphas", torch.sqrt(1.0 / alphas))
         self.reg_strength = float(reg_strength)
-        self.snr_gamma = float(snr_gamma)
         self.optimizer = torch.optim.Adam(self.eps_model.parameters(), lr=lr)
         self.ema_decay = ema_decay
         self.ema_model = self._clone_model() if ema_decay is not None else None
@@ -83,7 +81,7 @@ class DiffusionModel(nn.Module):
         x_t = sqrt_alpha_bar * x0 + sqrt_one_minus_alpha_bar * noise
         return x_t, noise
 
-    def train_step(self, x0: torch.Tensor, weighting: str = "constant") -> float:
+    def train_step(self, x0: torch.Tensor) -> float:
         batch_size = x0.size(0)
         device = x0.device
         t = torch.randint(0, self.betas.size(0), (batch_size,), device=device)
@@ -94,8 +92,6 @@ class DiffusionModel(nn.Module):
             pred_noise=pred_noise,
             true_noise=noise,
             alphas_cumprod_t=alpha_bar,
-            weighting=weighting,
-            snr_gamma=self.snr_gamma,
             reg_strength=self.reg_strength,
         )
         self.optimizer.zero_grad()

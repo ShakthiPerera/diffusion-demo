@@ -35,13 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_steps", type=int, default=20_000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weighting", type=str, choices=["constant", "snr"], default="constant")
     parser.add_argument("--ema_decay", type=float, default=None)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--embed_dim", type=int, default=64)
     parser.add_argument("--reg_strength", type=float, default=0.0, help="ISO regularisation strength.")
-    parser.add_argument("--snr_gamma", type=float, default=5.0)
     parser.add_argument("--nearest_k", type=int, default=5)
     parser.add_argument("--save_dir", type=str, default="outputs")
     parser.add_argument("--sample_size", type=int, default=10_000)
@@ -97,7 +95,6 @@ def train(args: argparse.Namespace) -> None:
         ema_decay=args.ema_decay,
         device=device,
         reg_strength=args.reg_strength,
-        snr_gamma=args.snr_gamma,
     ).to(device)
 
     # write a simple run sheet with model/diffusion settings
@@ -112,8 +109,6 @@ def train(args: argparse.Namespace) -> None:
         sf.write(f"  num_diffusion_steps: {args.num_diffusion_steps}\n")
         sf.write(f"  schedule: {args.schedule}\n")
         sf.write(f"  reg_strength: {args.reg_strength}\n")
-        sf.write(f"  weighting: {args.weighting}\n")
-        sf.write(f"  snr_gamma: {args.snr_gamma}\n")
         sf.write(f"  ema_decay: {args.ema_decay}\n\n")
         sf.write("Model\n")
         sf.write(f"  hidden_dim: {args.hidden_dim}\n")
@@ -136,7 +131,7 @@ def train(args: argparse.Namespace) -> None:
             data_iter = iter(dataloader)
             batch = next(data_iter)
         x0 = batch[0].to(device)
-        loss_val = model.train_step(x0, weighting=args.weighting)
+        loss_val = model.train_step(x0)
         if (step + 1) % args.log_every == 0 or step == 0:
             print(f"Step {step + 1}/{args.train_steps} - loss: {loss_val:.6f}")
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Datasets to process; adjust as needed.
+DATASETS=(moon_scatter swiss_roll central_banana)
+
+SCRIPT="entropy_calculation.py"
+
+for ds in "${DATASETS[@]}"; do
+  echo "=== Running entropy calculation for ${ds} (reg=0.0) ==="
+  python "${SCRIPT}" --dataset "${ds}" --reg_strength 0.0 "$@"
+  echo "=== Running entropy calculation for ${ds} (reg=0.3) ==="
+  python "${SCRIPT}" --dataset "${ds}" --reg_strength 0.3 "$@"
+done

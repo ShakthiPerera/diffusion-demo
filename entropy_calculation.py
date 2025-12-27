@@ -29,6 +29,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num_diffusion_steps", type=int, default=1000)
     parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="cosine")
     parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--noise_level", type=float, default=0.1, help="Noise level for dataset generation.")
     # entropy params
     parser.add_argument("--methods", type=str, default="knn,kde", help="Comma list from {knn,kde}.")
     parser.add_argument("--k", type=int, default=5, help="k for kNN entropy.")
@@ -48,6 +49,7 @@ def run_training(args: argparse.Namespace) -> None:
     train_args.lr = args.lr
     train_args.reg_strength = args.reg_strength
     train_args.weighting = args.weighting
+    train_args.noise_level = args.noise_level
     train_args.num_diffusion_steps = args.num_diffusion_steps
     train_args.schedule = args.schedule
     train_args.save_dir = args.save_dir

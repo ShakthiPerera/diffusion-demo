@@ -1,53 +1,48 @@
-# PyTorch denoising diffusion demo
+# Mini Diffusion (2D)
 
-The repository contains a simple PyTorch-based demonstration of denoising diffusion models.
-It just aims at providing a basic understanding of this generative modeling approach.
+Lightweight PyTorch demo for experimenting with DDPM and ISO‑regularised DDPM on a few toy 2D datasets. The repo is trimmed to the essentials: a single training script and a handful of supporting modules.
 
-## Directory layout
+## What’s here
+- `train.py` – CLI to train/sample the model and log PRDC metrics/plots.
+- `src/datasets.py` – generators for `moon_scatter`, `swiss_roll`, `central_banana`, `moon_circles` (all normalised to `[-1, 1]`).
+- `src/ddpm.py` – time‑conditioned MLP and diffusion model with optional EMA and ISO regularisation.
+- `src/losses.py` – DDPM loss with min‑SNR weighting and ISO regulariser.
+- `src/schedules.py` – beta schedules (cosine/linear/quadratic).
+- `src/metrics.py` – PRDC metrics implementation.
 
-```
-src/
-├── analysis/          # Plotting and evaluation utilities (PRDC, anisotropy, etc.)
-├── data/              # Synthetic dataset generators
-├── metrics/           # PRDC metrics implementation
-├── models/            # Core diffusion models and neural network layers
-│   └── methods/       # Model builders per training variant (ddpm, snr, ...)
-├── schedules/         # Beta schedule helpers
-└── training/
-    ├── losses.py      # Shared loss/weighting utilities
-    ├── methods/       # Method-specific entry points (ddpm, snr, placeholders)
-    └── train.py       # Unified training loop and argument parser
+Removed: nested `src/*` subpackages, improved/score placeholders, analysis scripts, and shell runners.
 
-scripts/               # Bash entry points for common experiment sweeps
-outputs/               # Default location for generated samples and logs
-```
+## Quickstart
+1) Install deps (examples):
+   ```bash
+   pip install -r requirements.txt
+   # or conda env create -f environment.yml
+   ```
+2) Train and sample (uses CPU or `--gpu_id` if CUDA is available):
+   ```bash
+   python train.py \
+     --dataset moon_scatter \
+     --train_steps 5000 \
+     --reg_strength 0.0 \
+     --weighting constant
+   ```
+3) Outputs land in `outputs/<dataset>/`:
+   - `generated_<dataset>.npy` – sampled points
+   - `prdc_<dataset>.txt` – precision/recall/density/coverage
+   - `plot_<dataset>.png` – scatter of train vs generated
+   - `true_<dataset>.npy` – training data used for the run
+   - `settings.txt` – dataset/model/diffusion/training configuration
 
-## Usage
+## Key arguments
+- `--dataset` `{moon_scatter, swiss_roll, central_banana, moon_circles}`
+- `--num_diffusion_steps` (default 1000), `--schedule` `{cosine, linear, quadratic}`
+- `--train_steps`, `--batch_size`, `--lr`
+- `--weighting` `{constant, snr}` with `--snr_gamma`
+- `--reg_strength` (ISO penalty on predicted noise; set >0 for ISO‑DDPM)
+- `--ema_decay` to enable EMA sampling
+- `--sample_size` number of generated points after training
 
-Select a training variant via the high-level dispatcher:
-
-```
-python main.py --method ddpm --help
-```
-
-Available methods can be listed with `python main.py --list-methods`. Current
-options:
-
-- `ddpm`: standard constant-weighting DDPM training.
-- `snr`: Improved DDPM/SNR-weighted training.
-- `improved`, `score`: placeholders ready for future extensions.
-
-The original training module remains accessible for advanced workflows:
-
-```
-python train.py --dataset eight_gaussians --train_steps 10000
-```
-
-The convenience shell scripts under `scripts/` call the same entry points and
-can be used from the repository root, for example:
-
-```
-./scripts/run_ddpm_schedule_sweep.sh
-```
-
-Existing notebook content is unchanged and still lives under `notebooks/`.
+## Tips
+- Increase `train_steps`/`hidden_dim` for tighter samples; start small for quick tests.
+- Use `--reg_strength` (e.g., 0.1–1.0) to encourage isotropy; set to 0 for plain DDPM.
+- `--weighting snr` matches the “Improved DDPM” min‑SNR objective; `constant` gives the vanilla loss.

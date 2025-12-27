@@ -9,14 +9,10 @@ import torch
 LossStats = Dict[str, torch.Tensor]
 
 
-def iso_regulariser(eps_pred: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
+def iso_regulariser(eps_pred: torch.Tensor) -> torch.Tensor:
+    print(eps_pred.shape)
     squared_norm = eps_pred.pow(2).sum(dim=1) / float(eps_pred.shape[1])
-    iso_error = (squared_norm - 1.0) ** 2
-    if reduction == "none":
-        return iso_error
-    if reduction == "sum":
-        return iso_error.sum()
-    return iso_error.mean()
+    return squared_norm
 
 
 def diffusion_loss(
@@ -29,7 +25,7 @@ def diffusion_loss(
     mse_scalar = mse.mean(dim=1)
     simple_mse = mse_scalar.mean()
 
-    iso_loss = iso_regulariser(pred_noise, reduction="mean")
+    iso_loss = iso_regulariser(pred_noise)
     reg_loss = reg_strength * iso_loss
 
     total_loss = simple_mse + reg_loss

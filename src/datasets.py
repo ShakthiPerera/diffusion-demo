@@ -101,8 +101,8 @@ class Synthetic2DDataset:
             r = max_distance * self.rng.uniform(0.5, 0.7)
             x_center = r * np.cos(theta)
             y_center = r * np.sin(theta)
-            x_offset = self.rng.normal(loc=-0.5, scale=sigma / 4.0)
-            y_offset = self.rng.normal(loc=-0.5, scale=sigma / 4.0)
+            x_offset = self.rng.normal(loc=-0.5, scale=sigma / 5.0)
+            y_offset = self.rng.normal(loc=-0.25, scale=sigma / 5.0)
             return (x_center + x_offset, y_center + y_offset)
 
         center = np.array([central_point() for _ in range(central_points)], dtype=np.float64)
@@ -123,8 +123,8 @@ class Synthetic2DDataset:
         crescent = crescent.astype(np.float64)
 
         circle_radius = 0.2
-        center1 = np.array([-1.5, -1.0], dtype=np.float64)
-        center2 = np.array([1.5, -1.0], dtype=np.float64)
+        center1 = np.array([-1.0, -0.75], dtype=np.float64)
+        center2 = np.array([1.0, -0.75], dtype=np.float64)
         angles1 = 2.0 * np.pi * self.rng.random(circle_density)
         angles2 = 2.0 * np.pi * self.rng.random(circle_density)
         radii1 = circle_radius * np.sqrt(self.rng.random(circle_density)) + 0.05 * self.rng.standard_normal(circle_density)
@@ -132,3 +132,58 @@ class Synthetic2DDataset:
         circle1 = np.c_[radii1 * np.cos(angles1) + center1[0], radii1 * np.sin(angles1) + center1[1]]
         circle2 = np.c_[radii2 * np.cos(angles2) + center2[0], radii2 * np.sin(angles2) + center2[1]]
         return np.vstack((crescent, circle1, circle2)).astype(np.float64)
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+    from pathlib import Path
+
+    import matplotlib
+
+    if not os.environ.get("DISPLAY"):
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    parser = argparse.ArgumentParser(description="Visualize all synthetic 2D datasets.")
+    parser.add_argument("--samples", type=int, default=10_000, help="Number of points per dataset.")
+    parser.add_argument("--noise", type=float, default=0.1, help="Noise level for noisy datasets.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument("--marker-size", type=float, default=4.0, help="Scatter marker size.")
+    parser.add_argument("--alpha", type=float, default=0.6, help="Scatter alpha.")
+    parser.add_argument("--output", type=str, default=None, help="Output image path.")
+    parser.add_argument("--show", action="store_true", help="Display the plot window.")
+    args = parser.parse_args()
+
+    dataset_names = Synthetic2DDataset.SUPPORTED
+    num_datasets = len(dataset_names)
+    cols = 2
+    rows = (num_datasets + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 6 * rows), squeeze=False)
+
+    for ax, name in zip(axes.ravel(), dataset_names):
+        dataset = Synthetic2DDataset(
+            name=name,
+            num_samples=args.samples,
+            noise_level=args.noise,
+            random_state=args.seed,
+        )
+        points = dataset.generate()
+        ax.scatter(points[:, 0], points[:, 1], s=args.marker_size, alpha=args.alpha)
+        ax.set_title(name)
+        ax.set_aspect("equal", "box")
+        ax.set_xlim(-1.05, 1.05)
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    # Hide any unused axes in the grid.
+    for ax in axes.ravel()[num_datasets:]:
+        ax.axis("off")
+
+    fig.tight_layout()
+    output_path = Path(args.output) if args.output else Path(__file__).with_name("synthetic_datasets.png")
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved plot to {output_path}")
+    if args.show:
+        plt.show()

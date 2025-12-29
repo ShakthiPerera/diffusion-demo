@@ -29,10 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", type=str, choices=DATASETS, default="moon_scatter")
     parser.add_argument("--num_samples", type=int, default=10_000)
     parser.add_argument("--noise_level", type=float, default=0.1)
-    parser.add_argument("--random_state", type=int, default=42)
+    parser.add_argument("--random_state", type=int, default=123)
     parser.add_argument("--num_diffusion_steps", type=int, default=1000)
-    parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="cosine")
-    parser.add_argument("--train_steps", type=int, default=20_000)
+    parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="linear")
+    parser.add_argument("--train_steps", type=int, default=100_000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--ema_decay", type=float, default=None)
@@ -123,17 +123,15 @@ def train(args: argparse.Namespace) -> None:
         sf.write(f"  sample_size: {args.sample_size}\n")
         sf.write(f"  nearest_k: {args.nearest_k}\n")
 
-    data_iter = iter(dataloader)
-    for step in range(args.train_steps):
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(dataloader)
-            batch = next(data_iter)
-        x0 = batch[0].to(device)
-        loss_val = model.train_step(x0)
-        if (step + 1) % args.log_every == 0 or step == 0:
-            print(f"Step {step + 1}/{args.train_steps} - loss: {loss_val:.6f}")
+    loss_val = 0
+    step = 0
+    while step < args.train_steps:
+        for batch in dataloader:
+            x0 = batch[0].to(device)
+            loss_val += model.train_step(x0)
+            if (step + 1) % args.log_every == 0 or step == 0:
+                print(f"Step {step + 1}/{args.train_steps} - loss: {loss_val/(step+1):.6f}")
+            step += 1
 
     print("Training complete. Sampling...")
     samples = model.sample(args.sample_size, device=device, use_ema=args.ema_decay is not None)

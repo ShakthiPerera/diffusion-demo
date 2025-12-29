@@ -21,12 +21,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-train", dest="do_train", action="store_false", help="Skip training if outputs exist.")
     parser.set_defaults(do_train=True)
     # minimal training knobs
-    parser.add_argument("--train_steps", type=int, default=5000)
+    parser.add_argument("--train_steps", type=int, default=100000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--reg_strength", type=float, default=0.0)
     parser.add_argument("--num_diffusion_steps", type=int, default=1000)
-    parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="cosine")
+    parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="linear")
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--noise_level", type=float, default=0.1, help="Noise level for dataset generation.")
     # entropy params

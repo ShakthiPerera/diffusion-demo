@@ -10,9 +10,8 @@ LossStats = Dict[str, torch.Tensor]
 
 
 def iso_regulariser(eps_pred: torch.Tensor) -> torch.Tensor:
-    print(eps_pred.shape)
-    squared_norm = eps_pred.pow(2).sum(dim=1) / float(eps_pred.shape[1])
-    return squared_norm
+    squared_norm = eps_pred.square().mean(dim=0).mean() - 1.0
+    return squared_norm.square()
 
 
 def diffusion_loss(

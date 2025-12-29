@@ -29,16 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", type=str, choices=DATASETS, default="moon_scatter")
     parser.add_argument("--num_samples", type=int, default=10_000)
     parser.add_argument("--noise_level", type=float, default=0.1)
-    parser.add_argument("--random_state", type=int, default=123)
+    parser.add_argument("--random_state", type=int, default=42)
     parser.add_argument("--num_diffusion_steps", type=int, default=1000)
     parser.add_argument("--schedule", type=str, choices=["cosine", "linear", "quadratic"], default="linear")
     parser.add_argument("--train_steps", type=int, default=100_000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--ema_decay", type=float, default=None)
-    parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--num_layers", type=int, default=3)
-    parser.add_argument("--embed_dim", type=int, default=64)
     parser.add_argument("--reg_strength", type=float, default=0.0, help="ISO regularisation strength.")
     parser.add_argument("--nearest_k", type=int, default=5)
     parser.add_argument("--save_dir", type=str, default="outputs")
@@ -80,13 +77,7 @@ def train(args: argparse.Namespace) -> None:
     np.save(os.path.join(run_dir, f"true_{args.dataset}.npy"), data.astype(np.float32))
 
     betas = make_beta_schedule(args.num_diffusion_steps, mode=args.schedule)
-    eps_model = TimeConditionedMLP(
-        input_dim=2,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        num_steps=args.num_diffusion_steps,
-        embed_dim=args.embed_dim,
-    )
+    eps_model = TimeConditionedMLP(num_features=(2, 128, 128, 128, 2), activation="relu", embed_dim=128, num_steps=args.num_diffusion_steps)
     device = torch.device(f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu")
     model = DiffusionModel(
         eps_model=eps_model,
@@ -111,9 +102,9 @@ def train(args: argparse.Namespace) -> None:
         sf.write(f"  reg_strength: {args.reg_strength}\n")
         sf.write(f"  ema_decay: {args.ema_decay}\n\n")
         sf.write("Model\n")
-        sf.write(f"  hidden_dim: {args.hidden_dim}\n")
-        sf.write(f"  num_layers: {args.num_layers}\n")
-        sf.write(f"  embed_dim: {args.embed_dim}\n")
+        sf.write("  architecture: [2, 128, 128, 128, 2]\n")
+        sf.write("  activation: relu\n")
+        sf.write("  embed_dim: 128\n")
         sf.write("\nTraining\n")
         sf.write(f"  train_steps: {args.train_steps}\n")
         sf.write(f"  batch_size: {args.batch_size}\n")

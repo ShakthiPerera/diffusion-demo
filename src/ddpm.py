@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 import copy
 
 import torch
@@ -11,21 +11,57 @@ import torch.nn as nn
 from .losses import diffusion_loss
 
 
+def make_activation(mode: str | None) -> nn.Module:
+    """Create activation matching the original DDPM MLP design."""
+
+    if mode is None or mode == "none":
+        activation = nn.Identity()
+    elif mode == "sigmoid":
+        activation = nn.Sigmoid()
+    elif mode == "tanh":
+        activation = nn.Tanh()
+    elif mode == "relu":
+        activation = nn.ReLU()
+    elif mode == "leaky_relu":
+        activation = nn.LeakyReLU()
+    elif mode == "elu":
+        activation = nn.ELU()
+    elif mode == "softplus":
+        activation = nn.Softplus()
+    elif mode in ("swish", "silu"):
+        activation = nn.SiLU()
+    else:
+        raise ValueError(f"Unknown activation function: {mode}")
+    return activation
+
+
+def make_dense(in_features: int, out_features: int, activation: str | None) -> nn.Sequential:
+    linear = nn.Linear(in_features, out_features, bias=True)
+    activation_layer = make_activation(activation)
+    return nn.Sequential(linear, activation_layer)
+
+
 class SinusoidalEncoding(nn.Module):
-    """Deterministic sinusoidal timestep encoding."""
+    """Sinusoidal position encoding matching the previous DDPM implementation."""
 
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
+
         embed_dim = int(abs(embed_dim))
-        if embed_dim < 2 or embed_dim % 2 != 0:
-            raise ValueError("embed_dim must be an even integer >= 2")
+        if embed_dim < 2:
+            raise ValueError("At least two embedding dimensions required")
+        if embed_dim % 2 != 0:
+            raise ValueError("Dimensionality has to be an even number")
+
         self.embed_dim = embed_dim
+
         omega = self._make_frequencies()
         self.register_buffer("omega", omega)
 
     def _make_frequencies(self) -> torch.Tensor:
         i = torch.arange(self.embed_dim // 2).view(1, -1)
-        return 1 / (10000 ** (2 * i / self.embed_dim))
+        omega = 1 / (10000 ** (2 * i / self.embed_dim))
+        return omega
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         if t.numel() == 1:
@@ -33,88 +69,127 @@ class SinusoidalEncoding(nn.Module):
         elif t.ndim == 1:
             t = t.view(-1, 1)
         elif t.ndim != 2 or t.shape[1] != 1:
-            raise ValueError(f"Invalid timestep shape: {t.shape}")
+            raise ValueError(f"Invalid shape encountered: {t.shape}")
+
+        device = t.device
         t = t.to(torch.float32)
         batch_size = t.shape[0]
-        emb = torch.zeros(batch_size, self.embed_dim, device=t.device, dtype=t.dtype)
+
+        emb = torch.zeros(batch_size, self.embed_dim, device=device)
         emb[:, 0::2] = torch.sin(self.omega * t)
         emb[:, 1::2] = torch.cos(self.omega * t)
         return emb
 
 
-def _make_activation(name: str | None) -> nn.Module:
-    if name is None or name == "none":
-        return nn.Identity()
-    if name == "relu":
-        return nn.ReLU()
-    if name in ("silu", "swish"):
-        return nn.SiLU()
-    if name == "tanh":
-        return nn.Tanh()
-    raise ValueError(f"Unknown activation: {name}")
-
-
-def _make_dense(in_features: int, out_features: int, activation: str | None) -> nn.Sequential:
-    layers = [nn.Linear(in_features, out_features)]
-    act = _make_activation(activation)
-    layers.append(act)
-    return nn.Sequential(*layers)
-
-
 class LearnableSinusoidalEncoding(nn.Sequential):
-    """Sinusoidal encoding followed by small MLP."""
+    """Learnable sinusoidal position encoding (sinusoidal + dense stack)."""
 
-    def __init__(self, num_features: list[int], activation: str = "silu") -> None:
+    def __init__(self, num_features: Sequence[int], activation: str = "relu") -> None:
         if len(num_features) < 2:
-            raise ValueError("num_features needs at least two entries")
+            raise ValueError("Number of features needs at least two entries")
+
+        num_dense_layers = len(num_features) - 1
+
         embed_dim = num_features[0]
+        sinusoidal_encoding = SinusoidalEncoding(embed_dim=embed_dim)
+
         dense_list = []
-        for idx, (in_f, out_f) in enumerate(zip(num_features[:-1], num_features[1:])):
-            is_not_last = idx < len(num_features) - 2
-            dense_list.append(_make_dense(in_f, out_f, activation if is_not_last else None))
-        super().__init__(SinusoidalEncoding(embed_dim), *dense_list)
+        for idx, (in_features, out_features) in enumerate(zip(num_features[:-1], num_features[1:])):
+            is_not_last = idx < num_dense_layers - 1
+
+            dense = make_dense(
+                in_features,
+                out_features,
+                activation=activation if is_not_last else None,
+            )
+
+            dense_list.append(dense)
+
+        super().__init__(sinusoidal_encoding, *dense_list)
 
 
-class TimeConditionedDense(nn.Module):
-    """Linear layer with learnable sinusoidal timestep conditioning."""
+class ConditionalDense(nn.Module):
+    """Fully connected layer with learnable sinusoidal timestep conditioning."""
 
-    def __init__(self, in_features: int, out_features: int, activation: str | None, embed_dim: int) -> None:
+    def __init__(self, in_features: int, out_features: int, activation: str | None = "relu", embed_dim: int | None = None) -> None:
         super().__init__()
+
         self.linear = nn.Linear(in_features, out_features)
-        self.activation = _make_activation(activation)
-        self.time_embed = LearnableSinusoidalEncoding(
-            [embed_dim, out_features, out_features],
-            activation=activation if activation is not None else "none",
-        )
+        self.activation = make_activation(activation)
+
+        if embed_dim is not None:
+            self.emb = LearnableSinusoidalEncoding(
+                [embed_dim, out_features, out_features],
+                activation=activation if activation is not None else "none",
+            )
+        else:
+            self.emb = None
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         out = self.linear(x)
-        out = out + self.time_embed(t)
-        out = self.activation(out)
+
+        if self.emb is not None:
+            emb = self.emb(t)
+            out = out + emb
+
+        if self.activation is not None:
+            out = self.activation(out)
+
         return out
 
 
-class TimeConditionedMLP(nn.Module):
-    """Small MLP with timestep embeddings injected at each layer."""
+class ConditionalDenseModel(nn.Module):
+    """Stack of conditional dense layers mirroring the previous DDPM MLP."""
 
-    def __init__(self, input_dim: int = 2, hidden_dim: int = 128, num_layers: int = 3, num_steps: int = 1000, embed_dim: int = 64) -> None:
+    def __init__(self, num_features: Sequence[int], activation: str = "relu", embed_dim: int | None = None) -> None:
         super().__init__()
-        if num_layers < 2:
-            raise ValueError("num_layers must be at least 2")
-        self.num_steps = int(num_steps)
-        self.data_dim = int(input_dim)
-        dims = [input_dim] + [hidden_dim] * (num_layers - 1) + [input_dim]
-        self.layers = nn.ModuleList()
-        for i in range(len(dims) - 1):
-            is_not_last = i < len(dims) - 2
-            activation = "silu" if is_not_last else "none"
-            self.layers.append(TimeConditionedDense(dims[i], dims[i + 1], activation=activation, embed_dim=embed_dim))
+
+        if len(num_features) < 2:
+            raise ValueError("Number of features needs at least two entries")
+
+        num_layers = len(num_features) - 1
+
+        dense_list = []
+        for idx, (in_features, out_features) in enumerate(zip(num_features[:-1], num_features[1:])):
+            is_not_last = idx < num_layers - 1
+
+            dense = ConditionalDense(
+                in_features,
+                out_features,
+                activation=activation if is_not_last else None,
+                embed_dim=embed_dim,
+            )
+
+            dense_list.append(dense)
+
+        self.dense_layers = nn.ModuleList(dense_list)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        h = x
-        for i, layer in enumerate(self.layers):
-            h = layer(h, t)
-        return h
+        for dense in self.dense_layers:
+            x = dense(x, t)
+        return x
+
+
+class TimeConditionedMLP(nn.Module):
+    """Small MLP with timestep embeddings injected at each layer (previous design)."""
+
+    def __init__(self, num_features: Sequence[int] = (2, 128, 128, 128, 2), activation: str = "relu", embed_dim: int = 128, num_steps: int = 1000) -> None:
+        super().__init__()
+        self.num_steps = int(num_steps)
+        self.data_dim = int(num_features[0])
+        self.model = ConditionalDenseModel(num_features=num_features, activation=activation, embed_dim=embed_dim)
+        self.data_dim = int(num_features[-1])
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        if t.ndim == 0:
+            t = t.view(1, 1)
+        elif t.ndim == 1:
+            t = t.view(-1, 1)
+        elif t.ndim != 2 or t.shape[1] != 1:
+            raise ValueError(f"Invalid timestep shape: {t.shape}")
+
+        t = t.to(dtype=x.dtype) + 1.0
+        return self.model(x, t)
 
 
 class DiffusionModel(nn.Module):
@@ -188,7 +263,7 @@ class DiffusionModel(nn.Module):
         device = torch.device(device) if device is not None else self.device
         self.eval()
         eps_model = self.ema_model if (use_ema and self.ema_model is not None) else self.eps_model
-        data_dim = self.data_dim or (eps_model.layers[-1].out_features if hasattr(eps_model, "layers") else 2)
+        data_dim = self.data_dim or 2
         x_t = torch.randn(num_samples, data_dim, device=device)
         T = self.betas.size(0)
         for t in reversed(range(T)):

@@ -1,4 +1,9 @@
 import numpy as np
+from sklearn.neighbors import NearestNeighbors
+from scipy.special import digamma
+from scipy.stats import multivariate_normal
+from math import pi, gamma
+
 
 def knn_entropy_kozachenko_leonenko(
     X: np.ndarray,
@@ -126,6 +131,95 @@ def kde_entropy(
 
     h_nats = -float(np.mean(log_p))
     return h_nats / np.log(base)
+
+
+
+
+def kl_data_to_gaussian_knn(X, k=5, metric="chebyshev"):
+    """
+    Estimate KL(p_data || N(mu, Sigma)) using kNN.
+    X : (n,2) data points
+    """
+    X = np.asarray(X, dtype=float)
+    n, d = X.shape
+    assert d == 2
+
+    # Fit Gaussian to data
+    mu = X.mean(axis=0)
+    Sigma = np.cov(X, rowvar=False)
+    gauss = multivariate_normal(mean=mu, cov=Sigma)
+
+    # kNN distances in data
+    nn = NearestNeighbors(n_neighbors=k + 1, metric=metric)
+    nn.fit(X)
+    distances, _ = nn.kneighbors(X)
+    eps = distances[:, k]
+
+    # Unit ball volume
+    if metric == "chebyshev":
+        Vd = 2.0 ** d
+    else:  # euclidean
+        Vd = (pi ** (d / 2)) / gamma(d / 2 + 1)
+
+    # log p_data(x) estimate
+    log_p_data = (
+        digamma(k)
+        - digamma(n)
+        - np.log(Vd)
+        - d * np.log(eps)
+    )
+
+    # log p_gauss(x) exact
+    log_p_gauss = gauss.logpdf(X)
+
+    # KL estimate
+    kl = np.mean(log_p_data - log_p_gauss)
+    return float(kl)
+
+
+
+
+def mutual_information_knn(X, k=5):
+    """
+    Kraskov kNN mutual information estimator for 2D data.
+    X : (n,2)
+    """
+    X = np.asarray(X, dtype=float)
+    n, d = X.shape
+    assert d == 2
+
+    x = X[:, 0][:, None]
+    y = X[:, 1][:, None]
+
+    # Joint space
+    nn_joint = NearestNeighbors(n_neighbors=k + 1, metric="chebyshev")
+    nn_joint.fit(X)
+    dist_joint, _ = nn_joint.kneighbors(X)
+    eps = dist_joint[:, k]
+
+    # Marginal counts
+    nn_x = NearestNeighbors(metric="chebyshev").fit(x)
+    nn_y = NearestNeighbors(metric="chebyshev").fit(y)
+
+    nx = np.array([
+        nn_x.radius_neighbors([x[i]], eps[i] - 1e-12, return_distance=False)[0].size - 1
+        for i in range(n)
+    ])
+
+    ny = np.array([
+        nn_y.radius_neighbors([y[i]], eps[i] - 1e-12, return_distance=False)[0].size - 1
+        for i in range(n)
+    ])
+
+    mi = (
+        digamma(k)
+        + digamma(n)
+        - np.mean(digamma(nx + 1) + digamma(ny + 1))
+    )
+
+    return float(mi)
+
+
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from typing import Dict, Any, Sequence
 
 import numpy as np
 
-from src import entropy_utils as ent
+from src import information_utils as ent
 import train as train_module
 
 
